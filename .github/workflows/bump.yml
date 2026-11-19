@@ -38,8 +38,10 @@ jobs:
         with:
           node-version: "22"
       - run: pip install "openai>=2" pytest pyyaml
-      - name: Update versions.lock
-        run: python scripts/check_updates.py --apply "${{ matrix.component }}" > update.json
+      - name: Update versions.lock and its copy in the general plugin
+        run: |
+          python scripts/check_updates.py --apply "${{ matrix.component }}" > update.json
+          python scripts/sync_shared.py
       - run: python -m pytest -q -m "not e2e"
       - name: Build the new FreeLLMAPI tag and check /v1/models
         if: matrix.component == 'freellmapi'

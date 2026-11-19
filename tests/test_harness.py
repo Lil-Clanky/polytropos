@@ -1,5 +1,7 @@
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import openai
@@ -61,6 +63,7 @@ def test_sync_shared_check(tmp_path):
     from sync_shared import check, sync
 
     shutil.copytree(ROOT / "shared", tmp_path / "shared", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy(ROOT / "versions.lock", tmp_path)
     for name in ("polytropos", "polytropos_router"):
         (tmp_path / "plugins" / name).mkdir(parents=True)
     assert sync(tmp_path)
@@ -75,6 +78,7 @@ def _synced(tmp_path):
     from sync_shared import sync
 
     shutil.copytree(ROOT / "shared", tmp_path / "shared", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy(ROOT / "versions.lock", tmp_path)
     for name in ("polytropos", "polytropos_router"):
         (tmp_path / "plugins" / name).mkdir(parents=True)
     sync(tmp_path)
@@ -105,6 +109,23 @@ def test_sync_removes_stale_files_only_inside_shared(tmp_path):
     assert fresh_tmp.exists() and (pycache / "x.pyc").exists()
     assert all(path.exists() for path in outside)
     assert check(tmp_path) == []
+
+
+def test_sync_copies_versions_lock_into_the_general_plugin(tmp_path):
+    from sync_shared import check
+
+    _synced(tmp_path)
+    copy = tmp_path / "plugins" / "polytropos" / "versions.lock"
+    assert copy.read_bytes() == (ROOT / "versions.lock").read_bytes()
+    assert not (tmp_path / "plugins" / "polytropos_router" / "versions.lock").exists()
+    (tmp_path / "scripts").mkdir()
+    shutil.copy(ROOT / "scripts" / "sync_shared.py", tmp_path / "scripts")
+    copy.write_text(copy.read_text() + "# edited\n")
+    out = subprocess.run([sys.executable, str(tmp_path / "scripts" / "sync_shared.py"), "--check"],
+                         capture_output=True, text=True)
+    assert out.returncode == 1 and out.stdout == f"differs: {copy.resolve()}\n"
+    copy.unlink()
+    assert check(tmp_path) == [str(copy)]
 
 
 def test_synced_copy_mode_is_0644_and_repaired(tmp_path):

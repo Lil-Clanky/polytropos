@@ -84,7 +84,6 @@ def _yes(fx: Effects, question: str) -> bool:
 
 
 def _repo_file(name: str) -> Path | None:
-    # shortcut: a pack install copies only the plugin folders, so outside a checkout these files are missing; ship them in the plugin folder through the sync or release tooling to fix it
     return next((d / name for d in (_HERE.parent, _HERE.parents[2]) if (d / name).is_file()), None)
 
 

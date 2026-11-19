@@ -1,4 +1,4 @@
-"""Copy shared/polytropos_shared into each plugin's _shared folder."""
+"""Copy shared/polytropos_shared into each plugin's _shared folder, and versions.lock into the general plugin."""
 
 import os
 import sys
@@ -15,6 +15,8 @@ def _pairs(root: Path):
     for src in sorted((root / "shared" / "polytropos_shared").glob("*.py")):
         for plugin in PLUGINS:
             yield src, root / "plugins" / plugin / "_shared" / src.name
+    # A pack install copies only the plugin folders, so the general plugin carries its own copy of the lock.
+    yield root / "versions.lock", root / "plugins" / "polytropos" / "versions.lock"
 
 
 def _stale(root: Path):
