@@ -23,7 +23,7 @@
 - Awake: maximum hold `7200` s. Backups: keep the newest `5`. Canary matrix cache: refresh at most every `86400` s. Canary checks on cloud models: 1 attempt per check.
 - Pack config seeds may not contain keys matching `(?i)(token|secret|passw(or)?d|api[_-]?key|private[_-]?key|credential|auth)`.
 - User-facing text (README, docs, doctor output, plugin descriptions): plain sentences, no em dashes, no slogans, no "X, not Y" contrasts, no rhetorical questions, no invented data.
-- Commits use the repository's local git identity (Lil-Clanky, noreply address), which is already set, and carry no attribution trailers. When tasks run in parallel, the controller makes the commits.
+- Commits use the repository's local git identity (Lil-Clanky, noreply address), which is already set, and carry no attribution trailers. Packages that run in parallel each work in their own git worktree under `.worktrees/<package>` on branch `pkg/<package>`; the controller rebases and merges them into `build/v0.1.0`.
 - Tests do not touch the real `~/.hermes`, `~/Library/LaunchAgents`, systemd user units, anything on ports 3001 or 11434, or local models. Network traffic in tests goes only to loopback fake servers that the test starts.
 
 ## Review Focus
@@ -73,7 +73,7 @@ Tasks are handed out in packages; one implementer works through a package task b
 **Interfaces:**
 - Produces `tests/fake_openai.py`:
   - `FakeOpenAI()`, a context manager running a loopback HTTP server. Attributes `base_url` (`http://127.0.0.1:<port>/v1`) and `requests: list[dict]` (parsed JSON bodies plus `"_path"` and `"_auth"` keys).
-  - `script(model: str, *replies: dict) -> None` queues replies per model. A reply is `{"content": str}`, `{"tool_calls": [{"name": str, "arguments": str}]}`, or `{"status": int}` for an HTTP error. With `stream=True` the same reply goes out as SSE chunks (text in 3 chunks, tool calls as deltas). `{"content": str, "fail_after": n}` drops the connection after `n` chunks.
+  - `script(model: str, *replies: dict) -> None` queues replies per model. A reply is `{"content": str}`, `{"tool_calls": [{"name": str, "arguments": str}]}`, or `{"status": int}` for an HTTP error. With `stream=True` the same reply goes out as SSE chunks (text in 3 chunks, tool calls as deltas). `{"content": str, "fail_after": n}` drops the connection after `n` chunks. Any reply may add `"delay": seconds`, which the server waits before answering (and between stream chunks).
   - Serves `GET /v1/models` (`{"data": [{"id": m}]}` for scripted models) and `POST /v1/chat/completions`. An empty queue answers `{"content": "ok"}`.
   - Its server class overrides `server_bind` to skip the reverse DNS lookup, as stack-canary's `tests/fake_ollama.py` does.
 - Produces `scripts/sync_shared.py`: `sync(root: Path) -> list[Path]` copies `shared/polytropos_shared/*.py` into `plugins/polytropos/_shared/` and `plugins/polytropos_router/_shared/` and returns the written paths. It writes a file only when its content differs, through a temp file and `os.replace`, because several test runs may sync at the same time. `check(root: Path) -> list[str]` returns the differing files. `python scripts/sync_shared.py --check` exits 1 when anything differs.
@@ -105,7 +105,7 @@ Expected: errors for missing modules.
 
 - [ ] **Step 3: Implement the files**
 
-`pyproject.toml` holds only `[tool.pytest.ini_options]` with `testpaths = ["tests"]` and the marker `e2e`. `test.yml`: matrix `ubuntu-latest`, `macos-latest` and Python `3.11`, `3.13`; steps `pip install openai pytest`, `python scripts/sync_shared.py --check`, `python -m pytest -q -m "not e2e"`. `.gitignore`: `__pycache__/`, `.pytest_cache/`, `*.pyc`, `.venv/`. `LICENSE`: MIT, copyright Lil-Clanky.
+`pyproject.toml` holds only `[tool.pytest.ini_options]` with `testpaths = ["tests"]` and the marker `e2e`. Create the local test environment with `uv venv --python 3.11 .venv` and `uv pip install --python .venv/bin/python openai pytest pyyaml`; every later task runs tests with `.venv/bin/python -m pytest`. `test.yml`: matrix `ubuntu-latest`, `macos-latest` and Python `3.11`, `3.13`; steps `pip install openai pytest pyyaml`, `python scripts/sync_shared.py --check`, `python -m pytest -q -m "not e2e"`. `.gitignore`: `__pycache__/`, `.pytest_cache/`, `*.pyc`, `.venv/`. `LICENSE`: MIT, copyright Lil-Clanky.
 
 - [ ] **Step 4: Run the tests**
 
@@ -195,6 +195,8 @@ def test_concurrent_remember():
   - `ollama_root(base_url: str) -> str` strips a trailing `/v1`. `ollama_loaded(base_url: str, *, timeout: float = 2.0) -> list[dict]` reads `GET {root}/api/ps` (`models`). `ollama_unload(base_url: str, model: str, *, timeout: float = 5.0) -> bool` posts `{"model": model, "keep_alive": 0}` to `{root}/api/generate`.
   - `kv_cache_bytes(model_info: dict, context: int) -> int | None` from the `/api/show` `model_info` keys ending in `.block_count`, `.attention.head_count_kv`, `.embedding_length` and `.attention.head_count`: `2 * layers * kv_heads * (embedding // heads) * context * 2`.
   - `fits(model_bytes: int, kv_bytes: int, total_ram_bytes: int, loaded_bytes: int, reserve_bytes: int = 4 * 1024**3) -> bool` is `model + kv + loaded + reserve <= total`, with the comment `# shortcut: rough estimate, the watchdog is the safety net; replace when coffee-vram or measurements say so`.
+  - `total_ram_bytes(*, platform: str = sys.platform, run=subprocess.run, read_text=lambda p: Path(p).read_text()) -> int | None`: `/usr/sbin/sysctl -n hw.memsize` on macOS, `MemTotal` (kB) from `/proc/meminfo` on Linux, `None` when unreadable.
+  - `ollama_fit(base_url: str, model: str, context: int, *, total_ram: int | None, timeout: float = 2.0) -> bool | None`: `True` when `/api/ps` lists the model; otherwise the model's `size` from `GET {root}/api/tags`, `kv_cache_bytes` from `POST {root}/api/show` (`{"model": model}`) for `context`, and the summed `size` of the models in `/api/ps`, passed to `fits`. `None` when `total_ram` is `None` or any lookup fails.
   - `class Watchdog(limits: Limits = Limits(), *, interval_s: float = 2.0, read: Callable[[], Signals] = read_signals, on_trip: Callable[[str], None])`, a context manager that polls on a daemon thread and calls `on_trip(reason)` once when pressure is `critical` or swap passes the limit. Attribute `tripped: str | None`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -209,10 +211,12 @@ def test_kv_cache_llama32_3b():        # block_count 28, head_count_kv 8, embedd
 def test_fits():                       # fits(2*10**9, 10**9, 16*1024**3, 0) is True; loaded 10*1024**3 -> False
 def test_watchdog_trips_once():        # reads normal, critical, critical -> on_trip called once
 def test_ollama_helpers_against_fake(): # small http.server with /api/ps and /api/generate; unload body has keep_alive 0 and returns True
+def test_total_ram_macos_linux():      # "17179869184" -> 17179869184; "MemTotal:       16000000 kB" -> 16000000 * 1024; failure -> None
+def test_ollama_fit_against_fake():    # loaded model -> True; 2 GB model, small kv, 16 GB RAM -> True; 14 GB model -> False; /api/show 500 -> None
 ```
 
 - [ ] **Step 2:** The tests fail.
-- [ ] **Step 3:** Implement `guard.py`. Then read the catalog entry and repository of the community plugin coffee-vram (`grep -ril coffee-vram ~/.hermes/hermes-agent/plugin-catalog`) and add a short note to `docs/spikes/2026-11-19-provider-plugin.md` on whether it could replace `fits` later (maintenance, license, Apple Silicon memory, network use). Version 0.1.0 ships the built-in check.
+- [ ] **Step 3:** Implement `guard.py`. Then read the catalog entry and repository of the community plugin coffee-vram (`grep -ril coffee-vram ~/.hermes/hermes-agent/plugin-catalog`) and write a short note to `docs/spikes/2026-11-19-coffee-vram.md` on whether it could replace `fits` later (maintenance, license, Apple Silicon memory, network use). Version 0.1.0 ships the built-in check.
 - [ ] **Step 4:** The tests pass.
 - [ ] **Step 5:** Commit "Add the shared memory guard"
 
@@ -231,7 +235,7 @@ def test_ollama_helpers_against_fake(): # small http.server with /api/ps and /ap
   - `class Matrix(cells: Iterable[Cell])` with `verdict(runtime_version: str, model: str, checks: Iterable[str] = TOOL_CHECKS) -> str` (`"fail"` when any listed check failed, `"pass"` when all passed, else `"unknown"`) and `passing_versions(model: str) -> list[str]` (versions where every tool check passed, newest first in numeric order).
   - `parse_matrix(data: dict) -> Matrix` raises `ValueError` for another `schema`.
   - `load_matrix(*, cache_path: Path | None = None, fetch: Callable[[str], bytes] | None = None, now: float | None = None, max_age_s: int = 86400) -> Matrix` uses a cache younger than `max_age_s`, otherwise fetches and rewrites the cache, and falls back to the stale cache or an empty `Matrix` when the fetch fails. Default cache path `cache_dir()/canary-matrix.json`.
-  - `local_results_path() -> Path` (`data_dir()/canary/openai-results.json`), `load_local_results() -> dict[str, str]` (`model -> "pass" | "fail"`), `save_local_results(results: dict[str, str]) -> None`.
+  - `local_results_path() -> Path` (`data_dir()/canary/openai-results.json`), `load_local_results() -> dict[str, str]` (slot text `"<upstream>/<model>"` -> `"pass" | "fail"`), `save_local_results(results: dict[str, str]) -> None`.
 
 - [ ] **Step 1: Write the failing tests** (the fixture holds `qwen3.5:0.8b` failing A6 and `llama3.2:3b` passing A1 to A6 on `0.40.16` and `0.40.15`)
 
@@ -362,14 +366,15 @@ def test_stream_error_before_output_retries():
 **Interfaces:**
 - Consumes: Tasks 3 to 8.
 - Produces:
-  - `class RouterClient(cfg: RouterConfig, *, api_key: str | None = None, openai_factory: Callable[..., Any] = openai.OpenAI, guard_read: Callable[[], Signals] = guard.read_signals, matrix_loader: Callable[[], Matrix] = canary.load_matrix, local_results: Callable[[], dict[str, str]] = canary.load_local_results, runtime_version: Callable[[Upstream], str | None] = <GET {root}/api/version for Ollama upstreams>, trace_path: Path | None = None)` with class attributes `HERMES_SKIP_TRANSPORT_WRAP = True` and `HERMES_SKIP_ASYNC_WRAP = True`, attributes `api_key`, `base_url = "polytropos://router"`, `chat` (with `completions.create`), `is_closed`, and method `close()`.
+  - `class RouterClient(cfg: RouterConfig, *, api_key: str | None = None, openai_factory: Callable[..., Any] = openai.OpenAI, guard_read: Callable[[], Signals] = guard.read_signals, matrix_loader: Callable[[], Matrix] = canary.load_matrix, local_results: Callable[[], dict[str, str]] = canary.load_local_results, runtime_version: Callable[[Upstream], str | None] = <GET {root}/api/version for Ollama upstreams>, fit_check: Callable[[Upstream, str], bool | None] = <guard.ollama_fit with guard.total_ram_bytes() and the upstream's context_window for Ollama upstreams, None for other runtimes>, trace_path: Path | None = None)` with class attributes `HERMES_SKIP_TRANSPORT_WRAP = True` and `HERMES_SKIP_ASYNC_WRAP = True`, attributes `api_key`, `base_url = "polytropos://router"`, `chat` (with `completions.create`), `is_closed`, and method `close()`.
+  - Decisions live in one module-level `DecisionCache` shared by every `RouterClient`, because Hermes may create more than one client per session.
   - Upstream clients are made lazily, one per upstream: `openai_factory(base_url=u.base_url, api_key=key)`. The key is `api_key` when `u.api_key_env == "FREELLMAPI_API_KEY"` and `api_key` is set, else `os.environ.get(u.api_key_env)`, else `"none"`.
   - `trace.write_trace(path: Path, record: dict) -> None` appends one JSON line and creates the file with mode `0o600`.
 
 Routing in `create(**kwargs)`, in this order:
 1. Get the turn's `Decision` from the cache, or make one with `decide` (Task 7). The classifier call goes through the classifier slot's upstream client.
 2. Candidates: the tier's chain, then the `complex` chain when the tier is `simple`, without duplicates. A pinned slot that is still eligible goes first.
-3. A local slot is eligible when `guard.judge(guard_read())` allows it, `estimate_tokens(messages, tools) + (kwargs.get("max_tokens") or 1024) <= window(cfg, slot)`, and, for requests with `tools`, the matrix verdict for (runtime version, model) is not `"fail"`. A cloud slot is eligible when the request has no `tools` or `local_results().get(model) != "fail"`.
+3. A local slot is eligible when `guard.judge(guard_read())` allows it, `estimate_tokens(messages, tools) + (kwargs.get("max_tokens") or 1024) <= window(cfg, slot)`, `fit_check(upstream, model) is not False`, and, for requests with `tools`, the matrix verdict for (runtime version, model) is not `"fail"`. A cloud slot is eligible when the request has no `tools` or `local_results().get(f"{slot.upstream}/{slot.model}") != "fail"`. The guard, window and fit filters are hard. The two canary filters are soft: when they would leave no candidate, the slots they removed come back in chain order, so a failing canary never makes every tool turn fail.
 4. Call `upstream.chat.completions.create(**{**kwargs, "model": slot.model})`. On `openai.RateLimitError`, `openai.APITimeoutError`, `openai.APIConnectionError`, or `openai.APIStatusError` with status 500 or higher, go to the next candidate. Without streaming, when `broken_tool_calls` finds problems and another candidate exists, try that one once. With streaming, return `GuardedStream(result, tools=..., retry=<the same call on the next eligible candidate, or None>)`.
 5. Local calls run inside `guard.Watchdog`; for a stream the watchdog stays on until the stream's `on_close`. On a trip, close and drop that upstream's client, which aborts the in-flight HTTP request (the call then raises `openai.APIConnectionError`), and unload the model when the upstream's `runtime` is `"ollama"`. Without streaming, or before any chunk was yielded, the error falls through to the next candidate. After text was yielded the error reaches Hermes (Review Focus 2); Hermes retries the request, and the guard check in step 3 then keeps it off the local model.
 6. Set `decision.pinned` to the slot used. When `save_traces` is on, write a record with `time`, `tier`, `reason`, `slot`, `retried` and `fell_back_from`. Return the result.
@@ -391,6 +396,8 @@ def test_api_key_from_client_kwargs_for_freellmapi(): # RouterClient(api_key="k"
 def test_traces_off_by_default(tmp_path):
 def test_trace_file_mode(tmp_path):                   # 0o600
 def test_watchdog_trip_aborts_local_and_falls_back(): # guard_read turns critical during a slow local reply -> cloud answers
+def test_fit_refusal_skips_local():                   # fit_check -> False -> cloud; fit_check -> None -> local allowed
+def test_canary_filter_never_empties_chain():         # tool turn, the only cloud slot has local result "fail" -> still called
 ```
 
 Also port the cases from the PR's `tests/agent/test_router_loop.py` and `tests/agent/test_router_trace.py` (`git -C ~/.hermes/hermes-agent show feat/model-router-virtual-provider:<path>`) that still apply to the provider client, such as classifier parsing and fallback order.
@@ -474,14 +481,14 @@ def test_import_without_hermes():
     - `detect() -> Detected`
     - `node_ok() -> tuple[bool, str]` (`node --version` against `>=20.18.0 <25.0.0`)
     - `build(pin: Pin) -> Path`: `git clone --depth 1 --branch <tag> REPO_URL releases/<tag>`, check `git rev-parse HEAD == pin.commit`, replace `server/data` with a symlink to `data/`, `npm ci`, `npm run build`. A failed step removes the release folder and raises `BuildError`.
-    - `ensure_env() -> Path` writes `data/.env` with `ENCRYPTION_KEY=<64 hex characters from secrets.token_hex(32)>` and `PORT=3001` when it is missing, mode `0o600`.
+    - `ensure_env() -> Path` makes sure `data/.env` (mode `0o600`) has an `ENCRYPTION_KEY` line and leaves an existing one unchanged. A new value is the content of `data/.encryption-key` when that file exists, else `secrets.token_hex(32)`. Reason: FreeLLMAPI requires `ENCRYPTION_KEY` when `NODE_ENV=production` and prefers it over the key file (`server/src/lib/crypto.ts`), and a development install keeps its key in `.encryption-key`, so a fresh random key next to an adopted database would make every stored provider key unreadable. The key value is never printed or logged.
     - `install(pin: Pin) -> None`: raises `PortBusy` when `detect().listening` and the service is not managed; builds, runs `ensure_env`, points `current`, installs and starts the service with `ServiceSpec(program=[node, str(root / "current/server/dist/index.js")], env={"PORT": "3001", "HOST": "127.0.0.1", "NODE_ENV": "production", "FREEAPI_ENV_PATH": str(root / "data/.env")}, workdir=root / "current", log_path=state_dir() / "freellmapi.log")`, and waits up to 60 s for `detect().is_freellmapi`.
     - `adopt(source_checkout: Path, pin: Pin) -> None`: refuses with `PortBusy` while port 3001 still answers (the user stops the old server first); copies `server/data/freeapi.db`, `server/data/.encryption-key` and `.env` from the checkout into `data/` (each when present), then runs `install(pin)`.
     - `backup(label: str) -> Path` copies `freeapi.db`, `.encryption-key` and `.env` from `data/` into `backups/<time>-<label>/` and keeps the newest 5.
     - `update(pin: Pin, *, check: Callable[[], bool] | None = None) -> UpdateResult`: the six update steps of the spec; on a failed health check or `check()` it restores the backup, points `current` back and starts the old release.
     - `rollback() -> UpdateResult` restores the newest backup and the release it names.
     - `health(api_key: str | None = None) -> bool`
-    - `cli_command(lock: dict) -> list[str]`: `[node, <current>/cli/<built entry>]` when managed (find the built entry in the checkout's `cli/package.json` `bin`), else `["npx", f"freellmapi@{lock['freellmapi']['cli_version']}"]`.
+    - `cli_command(lock: dict) -> list[str]`: `[node, str(root / "current/cli/dist/index.js")]` when managed (the `bin` entry of FreeLLMAPI's `cli/package.json`; the root `npm run build` builds server, cli and client), else `["npx", f"freellmapi@{lock['freellmapi']['cli_version']}"]`.
 
 - [ ] **Step 1: Write the failing tests** (a fake `run` that creates folders and returns scripted output, a fake `http_get`, a fake `ServiceManager`)
 
@@ -491,6 +498,8 @@ def test_install_refuses_when_port_taken_by_unmanaged():
 def test_build_verifies_commit():                 # rev-parse returns another sha -> BuildError, release folder removed
 def test_build_links_data():                      # releases/<tag>/server/data is a symlink to data/
 def test_ensure_env_once():                       # a second call keeps the first key; mode 0o600
+def test_ensure_env_reuses_key_file():            # data/.encryption-key holds a key -> .env gets that same value
+def test_ensure_env_keeps_existing_key():         # .env already has ENCRYPTION_KEY=x -> unchanged, other lines kept
 def test_backup_prunes_to_five():
 def test_update_success_switches_current():
 def test_update_failed_health_rolls_back():       # current points at the old tag, backup restored, rolled_back True
@@ -499,7 +508,7 @@ def test_node_range():                            # v20.18.0 ok; v25.1.0 and v18
 ```
 
 - [ ] **Step 2:** The tests fail. **Step 3:** Implement. **Step 4:** The tests pass.
-- [ ] **Step 4b: Check the data symlink against the real server (spec spike 5).** Only when `sysctl -n kern.memorystatus_vm_pressure_level` prints `1` and free disk is above 10 GB. In a scratch folder, run `build()` for the pinned tag with a real `run`, then start `node server/dist/index.js` from the release with `PORT=3999`, `HOST=127.0.0.1` and `FREEAPI_ENV_PATH=<scratch>/data/.env`. Expected: `GET http://127.0.0.1:3999/v1/models` answers with 200 or 401, and `freeapi.db` and `.encryption-key` appear in `<scratch>/data/`. Stop the process and delete the scratch folder. Port 3001 and the maintainer's own checkout stay untouched. Write the result to `docs/spikes/2026-11-19-provider-plugin.md`.
+- [ ] **Step 4b: Check the data symlink against the real server (spec spike 5).** Only when `sysctl -n kern.memorystatus_vm_pressure_level` prints `1` and free disk is above 10 GB. In a scratch folder, run `build()` for the pinned tag with a real `run`, then start `node server/dist/index.js` from the release with `PORT=3999`, `HOST=127.0.0.1` and `FREEAPI_ENV_PATH=<scratch>/data/.env`. Run `ensure_env()` against `<scratch>/data` first. Expected: the server boots in production mode with the key from `data/.env`, `GET http://127.0.0.1:3999/v1/models` answers with 200 or 401, and `freeapi.db` appears in `<scratch>/data/`. Stop the process and delete the scratch folder. Port 3001 and the maintainer's own checkout stay untouched. Write the result to `docs/spikes/2026-11-19-freellmapi-data-symlink.md`; when the memory or disk condition fails, write that the check was skipped and why.
 - [ ] **Step 5:** Commit "Add the FreeLLMAPI manager"
 
 ### Task 14: Programs and versions.lock
@@ -591,7 +600,7 @@ def test_node_range():                            # v20.18.0 ok; v25.1.0 and v18
   - `plugin.yaml`: `name: polytropos`, `version: 0.1.0`, `description: Doctor, FreeLLMAPI service, memory guard and sleep hold for Polytropos`, `author: Lil-Clanky`, `provides_hooks: [pre_llm_call, post_llm_call, on_session_end]`, `provides_commands: [polytropos]`, plus the fields Task 2 found necessary.
   - `register(ctx) -> None`: `ctx.register_cli_command("polytropos", "Polytropos doctor, installer and FreeLLMAPI manager", cli.setup_parser, cli.handle)`, `ctx.register_command("polytropos", slash.handle, ...)` in the call shape ponytail uses (`~/.claude/plugins/cache/ponytail/ponytail/5.3.3/__init__.py`), and the three hooks.
   - `cli.setup_parser(parser: argparse.ArgumentParser) -> None` with subcommands `doctor`, `setup`, `install [--all-optional] [--only NAME ...]`, `adopt --from PATH`, `update [freellmapi|programs|all]`, `rollback freellmapi`, `canary run` (filled in by Task 20), `status`, `uninstall [--purge-data]`; `cli.handle(args: argparse.Namespace) -> int`.
-  - `setup`: runs `FreeLLM.cli_command(lock) + ["setup-hermes"]`; writes the router section with `hermes config set` (one call per key, each recorded with `record_config_change`); asks before setting `model.provider` and `model.default` to `polytropos-router` and `auto`. In external mode it asks for the FreeLLMAPI URL.
+  - `setup`: runs `FreeLLM.cli_command(lock) + ["setup-hermes"]`; writes the router section with `hermes config set` (one call per key, each recorded with `record_config_change`); asks before setting `model.provider` and `model.default` to `polytropos-router` and `auto`. In external mode it asks for the FreeLLMAPI URL. When `hermes config set` cannot set a mapping or list value (check `hermes config set --help`), it copies `config.yaml` to `config.yaml.polytropos-backup` and writes the `plugins.entries.polytropos-router` section with `hermes_yaml`, recording the old section in `state.json`.
   - `install`: checks `node_ok()`; installs FreeLLMAPI in managed mode unless `detect()` finds a FreeLLMAPI already, in which case it records external mode and prints the `adopt` command; refuses when port 3001 is held by another program; installs default programs that need it; offers ponytail's fallback when the pack did not install ponytail; asks `Install <name>? [y/N]` per optional item unless `--all-optional` or `--only` decide; records shared parts in `state.json`.
   - `update`: reads `https://api.github.com/repos/Lil-Clanky/polytropos/releases/latest` with `urllib`, prints what changes, asks, then runs `hermes plugins pack install <new pack file>` with inherited stdio, updates programs and runs `FreeLLM.update`. After a plugin change it prints the gateway restart command (check the name with `hermes gateway --help`) and leaves the restart to the user.
   - `uninstall`: stops and removes the service and the programs Polytropos installed when `release_shared` reports no other profile; restores recorded config values with `hermes config set`; prints the `hermes plugins remove` commands for the pack plugins; keeps `data/` unless `--purge-data` and a typed `yes`.
@@ -603,7 +612,7 @@ def test_node_range():                            # v20.18.0 ok; v25.1.0 and v18
 
 ### Task 18: stack-canary matrix export
 
-Work in a separate git worktree so the main checkout, which the nightly LaunchAgent uses, stays untouched: `git -C ~/Projects/stack-canary worktree add ../stack-canary-polytropos -b feat/matrix-json-openai`. Run its tests with `python -m pytest -q` inside the worktree.
+Work in a separate git worktree so the main checkout, which the nightly LaunchAgent uses, stays untouched: `git -C ~/Projects/stack-canary worktree add ~/Projects/polytropos/.worktrees/stack-canary -b feat/matrix-json-openai`. Run its tests with `python -m pytest -q` inside the worktree, with a Python that has stack-canary's test dependencies (check its `pyproject.toml`; create `.venv` inside the worktree with `uv` if needed). Never write to `~/.stack-canary` or the main checkout.
 
 **Files:**
 - Modify: the report and publish code in `src/stack_canary/` (find where `MATRIX.md` and `summary.json` are written: `grep -rn "MATRIX.md\|summary.json" src`)
@@ -625,7 +634,8 @@ Same worktree and branch as Task 18.
 - Test: new tests under `tests/`
 
 **Interfaces:**
-- Produces `canary run --openai-endpoint URL [--api-key-env NAME] [--model M ...] [--attempts N]`. The URL must be a loopback base URL ending in `/v1`. Models come from `--model` or from `GET /v1/models`. Requests carry `Authorization: Bearer <value of NAME>` when `--api-key-env` is given; the value comes from the environment and does not appear in results or logs. The Ollama-specific steps (`/api/version`, `/api/tags`, the memory guard for port 11434, thinking detection) are skipped. Results record `"endpoint_kind": "openai"` and the endpoint URL, in the same JSON layout as `--endpoint` runs. `--attempts` defaults to 1 in this mode.
+- Produces `canary run --openai-endpoint URL [--api-key-env NAME] [--model M ...] [--attempts N] [--summary-json PATH]`. The URL must be a loopback base URL ending in `/v1`. Models come from `--model` or from `GET /v1/models`. Requests carry `Authorization: Bearer <value of NAME>` when `--api-key-env` is given; the value comes from the environment and does not appear in results or logs. The Ollama-specific steps (`/api/version`, `/api/tags`, the memory guard for port 11434, thinking detection) are skipped. Results record `"endpoint_kind": "openai"` and the endpoint URL, in the same JSON layout as `--endpoint` runs. `--attempts` defaults to 1 in this mode. `--summary-json PATH` (also allowed in the other modes) writes `{"endpoint": url, "endpoint_kind": "openai" | "ollama", "results": [{"model": m, "check": "A1", "status": "pass" | "fail" | "error", "passed": n, "attempts": k}]}`.
+- Make the `matrix.json` export of Task 18 leave out results with `"endpoint_kind": "openai"`, with a test.
 
 - [ ] **Step 1:** Write failing tests against a fake OpenAI-compatible server: models come from `/v1/models`; the auth header arrives and the key value is absent from the written results; a non-loopback URL is refused; A1 to A6 run once each by default.
 - [ ] **Step 2:** The tests fail. **Step 3:** Implement. **Step 4:** The full stack-canary suite passes.
@@ -639,7 +649,7 @@ Same worktree and branch as Task 18.
 
 **Interfaces:**
 - Consumes: Task 19's command and result layout; `canary.save_local_results` (Task 5); router config (Task 6); `FreeLLM.update(check=...)` (Task 13).
-- Produces `run_canary(cfg: RouterConfig, *, run=subprocess.run, models: list[str] | None = None) -> dict[str, str]`, which runs `canary run --openai-endpoint <freellmapi base_url> --api-key-env FREELLMAPI_API_KEY --model <each cloud model in the routes> --attempts 1`, reads the result files it reports, stores `model -> pass | fail` with `save_local_results`, and returns the mapping. `hermes polytropos canary run` prints a summary and exits 1 when a model fails. `update` passes `lambda: run_canary(cfg, models=[first cloud model]).get(...) == "pass"` as `check`.
+- Produces `run_canary(cfg: RouterConfig, *, run=subprocess.run, models: list[str] | None = None) -> dict[str, str]`. For each cloud upstream with a loopback `base_url` (others are skipped with a printed note) it runs `canary run --openai-endpoint <base_url> [--api-key-env <api_key_env>] --model <each of its models in the routes, or only those in models> --attempts 1 --summary-json <temp file>`, reads that file, and stores `"<upstream>/<model>" -> "pass"` when checks A1 to A6 all passed, else `"fail"`, with `save_local_results` (merged into earlier results). It returns the new entries. `hermes polytropos canary run` prints a summary and exits 1 when a model fails. `update` passes `lambda: run_canary(cfg, models=[first cloud model]).get(...) == "pass"` as `check`.
 
 - [ ] **Step 1:** Write failing tests with a fake `canary` executable on `PATH` that writes a result file: results saved; exit code 1 when a model fails; the API key value never appears in argv.
 - [ ] **Step 2:** The tests fail. **Step 3:** Implement. **Step 4:** The tests pass.
