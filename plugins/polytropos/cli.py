@@ -12,7 +12,7 @@ import sys
 import tempfile
 import tomllib
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 from urllib.parse import urlparse
@@ -415,13 +415,20 @@ def _update(args, fx: Effects) -> int:
         tag, pack_text, lock = _release(fx)
         pack = safe_load(pack_text) or {}
         own = [e for e in pack.get("plugins", []) if doctor._repo_subdir(str(e["repo"]))[0] == OWN_REPO]
+        names = {doctor._repo_subdir(str(e["repo"])): name for name, e in lock.get("plugins", {}).items()}
+        # The lock's name lets the check find a plugin that programs.ponytail_fallback cloned without a record.
+        others = [{**e, "name": names.get(doctor._repo_subdir(str(e["repo"])), "")}
+                  for e in pack.get("plugins", []) if e not in own]
     except Exception as err:  # network, JSON, TOML or YAML errors
         print(f"Could not read the latest Polytropos release from GitHub: {err}")
         return 1
     home, state, everything = hermes_home(), load_state(), args.component == "all"
     profile = str(home)
     ctx = doctor.DoctorContext(home, Path.home(), sys.platform, lock, {"plugins": own}, fx.run, fx.http_get, None)
-    changes = [r.label for r in doctor.check_plugins(ctx) if r.status != "ok"] if everything else []
+    changes = []
+    if everything:  # a new release changes the own plugins; a pack plugin that is not installed is repaired alike
+        changes = [r.label for r in doctor.check_plugins(ctx) if r.status != "ok"]
+        changes += [r.label for r in doctor.check_plugins(replace(ctx, pack={"plugins": others})) if r.status == "fail"]
     print(f"The latest Polytropos release is {tag}.")
     for label in changes:
         print(f"  changes: {label}")

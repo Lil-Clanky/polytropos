@@ -336,6 +336,37 @@ def test_update_stops_when_an_own_plugin_is_at_another_revision(tmp_home, capsys
     assert fl.updates == []
 
 
+def test_update_repairs_a_missing_pack_plugin_and_leaves_a_complete_home_alone(tmp_home, capsys):
+    home = tmp_home / ".hermes"
+    superpowers = LOCK["plugins"]["superpowers"]
+    pack = yaml.safe_load(pack_text())
+    pack["plugins"].append({"repo": "obra/superpowers", "ref": superpowers["commit"]})
+    own = "https://github.com/Lil-Clanky/polytropos.git#plugins/"
+    meta = {"polytropos": {"source": own + "polytropos", "revision": SHA_NEW},
+            "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW},
+            "ponytail": {"source": "https://github.com/DietrichGebert/ponytail.git", "revision": "c" * 40}}
+    (home / "plugins" / "ponytail").mkdir(parents=True)
+    meta_path = home / "plugins" / ".install-metadata.json"
+    meta_path.write_text(json.dumps(meta))
+    versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
+                "ast-grep": LOCK["ast-grep"]["version"]}
+    run, asked = FakeRun(versions=versions), []
+    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", yaml.safe_dump(pack), new_lock_text()),
+                     ask=lambda q: asked.append(q) or "y")
+    assert cli.handle(parse("update"), fx) == 0
+    assert "  changes: plugin obra/superpowers is not installed" in capsys.readouterr().out and len(asked) == 1
+    pack_cmd = ["hermes", "plugins", "pack", "install", "--force"]
+    assert [c[:5] for c in run.commands() if c[:2] == ["hermes", "plugins"] or c[0] == "git"] == [pack_cmd]
+
+    meta["superpowers"] = {"source": "https://github.com/obra/superpowers.git", "revision": superpowers["commit"]}
+    meta_path.write_text(json.dumps(meta))
+    fx.run = run = FakeRun(versions=versions)
+    assert cli.handle(parse("update"), fx) == 0
+    out = capsys.readouterr().out
+    assert "changes:" not in out and "hermes gateway restart" not in out
+    assert [c for c in run.commands() if c[:2] == ["hermes", "plugins"] or c[0] == "git"] == []
+
+
 def test_update_freellmapi_shows_both_tags_and_the_compare_link_before_it_asks(tmp_home, capsys):
     managed_state(tmp_home / ".hermes")
     before, fl, run, asked = load_state(), FakeFreeLLM(), FakeRun(), []
