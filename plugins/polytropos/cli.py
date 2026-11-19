@@ -136,18 +136,29 @@ def _hermes_version(fx: Effects) -> str | None:
     return match.group(0) if match else None
 
 
+def _expected_plugins(home: Path, lock: dict) -> dict:
+    """The lock's plugins, and both own plugins at the commit of the general plugin's install record. Without that
+    record (a run from a checkout) their ref is empty and the check reports only whether they are installed."""
+    try:
+        own = doctor.install_records(home).get((OWN_REPO, "plugins/polytropos"))
+    except (OSError, ValueError):  # the plugin check reports it
+        own = None
+    revision = str(own[1].get("revision") or "") if own else ""
+    return {"plugins": [{"repo": OWN_REPO, "ref": revision, "subdir": f"plugins/{name}"}
+                        for name in ("polytropos", "polytropos_router")]
+            + [{"repo": entry["repo"], "ref": entry["commit"], "name": name}
+               for name, entry in lock.get("plugins", {}).items()]}
+
+
 def _doctor(args, fx: Effects) -> int:
     lock = _lock()
     if lock is None:
         return 1
-    pack_file = _repo_file("hermes-pack.yaml")
-    pack = (safe_load(pack_file.read_text()) or {}) if pack_file else {}
-    ctx = doctor.DoctorContext(hermes_home(), Path.home(), sys.platform, lock, pack, fx.run, fx.http_get,
-                               _hermes_version(fx))
+    home = hermes_home()
+    ctx = doctor.DoctorContext(home, Path.home(), sys.platform, lock, _expected_plugins(home, lock), fx.run,
+                               fx.http_get, _hermes_version(fx))
     results = doctor.run_checks(ctx)
     print(doctor.format_report(results))
-    if pack_file is None:
-        print("The pack file was not found, so the plugin check was skipped.")
     return 1 if any(r.status == "fail" for r in results) else 0
 
 

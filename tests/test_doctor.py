@@ -89,6 +89,19 @@ def test_plugins_match_records_by_source(ctx):
     assert [r.status for r in got] == ["fail"] * 3 and "not installed" in got[1].label
 
 
+def test_plugins_cloned_without_the_installer_are_checked_by_their_git_head(ctx):
+    pin = LOCK["plugins"]["ponytail"]
+    folder = ctx.hermes_home / "plugins" / "ponytail"
+    (folder / ".git").mkdir(parents=True)
+    ctx.pack = {"plugins": [{"repo": pin["repo"], "ref": pin["commit"], "name": "ponytail"}]}
+    calls, heads = [], iter([pin["commit"] + "\n", "c" * 40 + "\n"])
+    ctx.run = lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0, stdout=next(heads), stderr="")
+    assert only(d.check_plugins(ctx)).label == "plugins: ponytail"
+    r = only(d.check_plugins(ctx))
+    assert r.status == "warn" and "ponytail is at ccccccc" in r.label
+    assert calls[0] == ["git", "-C", str(folder), "rev-parse", "HEAD"]
+
+
 def test_freellmapi_not_running(ctx):
     ctx.http_get = lambda url, headers: (0, b"")
     r = only(d.check_freellmapi(ctx))

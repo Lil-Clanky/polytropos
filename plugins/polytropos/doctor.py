@@ -85,31 +85,49 @@ def _repo_subdir(source: str, subdir: str | None = None) -> tuple[str, str | Non
     return (f"{m.group('owner')}/{m.group('repo')}" if m else base.strip()), sub
 
 
-def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
-    path = ctx.hermes_home / "plugins" / ".install-metadata.json"
+def install_records(hermes_home: Path) -> dict:
+    """Hermes's plugin install records by the (repo, subdir) of their source. OSError or ValueError if unreadable."""
     try:
-        metadata = json.loads(path.read_text(encoding="utf-8-sig"))
+        metadata = json.loads((hermes_home / "plugins" / ".install-metadata.json").read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
-        metadata = {}
-    except (OSError, ValueError) as e:
-        return [CheckResult("fail", "plugin install metadata is unreadable", type(e).__name__)]
+        return {}
     if not isinstance(metadata, dict):
-        return [CheckResult("fail", "plugin install metadata is unreadable", "expected a JSON object")]
+        raise ValueError("expected a JSON object")
     # Records are keyed by the installed folder name, which the manifest decides, so match on source.
-    installed = {_repo_subdir(str(r.get("source") or "")): (name, r)
-                 for name, r in metadata.items() if isinstance(r, dict)}
+    return {_repo_subdir(str(r.get("source") or "")): (name, r) for name, r in metadata.items() if isinstance(r, dict)}
+
+
+def _git_head(ctx: DoctorContext, folder: Path) -> str:
+    try:
+        return ctx.run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True,
+                       check=False).stdout.strip()
+    except OSError:  # git is not installed
+        return ""
+
+
+def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
+    """Each pack entry against its install record. An entry with a name may also be a git clone in plugins/<name>,
+    and an entry without a ref only needs to be installed."""
+    try:
+        installed = install_records(ctx.hermes_home)
+    except (OSError, ValueError) as e:
+        return [CheckResult("fail", "plugin install metadata is unreadable",
+                            str(e) if type(e) is ValueError else type(e).__name__)]
     results, good = [], []
     for entry in ctx.pack.get("plugins", []):
         key = _repo_subdir(str(entry["repo"]), entry.get("subdir") or "")
         pinned = str(entry["ref"]).lower()
         label = key[0] + (f"#{key[1]}" if key[1] else "")
+        folder = ctx.hermes_home / "plugins" / entry.get("name", "")
+        if key not in installed and entry.get("name") and (folder / ".git").exists():
+            # programs.ponytail_fallback clones without Hermes's installer, which leaves no record
+            installed[key] = (entry["name"], {"revision": _git_head(ctx, folder)})
         if key not in installed:
-            results.append(CheckResult("fail", f"plugin {label} is not installed",
-                                       fix="hermes plugins pack install polytropos/hermes-pack.yaml"))
+            results.append(CheckResult("fail", f"plugin {label} is not installed", fix="hermes polytropos update"))
             continue
         name, record = installed[key]
         revision = str(record.get("revision") or "").lower()
-        if revision != pinned:
+        if pinned and revision != pinned:
             results.append(CheckResult("warn", f"plugin {name} is at {revision[:7] or 'an unknown commit'}, "
                                                f"the pack pins {pinned[:7]}"))
         else:

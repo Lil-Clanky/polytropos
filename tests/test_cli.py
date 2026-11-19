@@ -133,6 +133,34 @@ def test_doctor_prints_report_and_exits_1_on_a_failed_check(tmp_home, monkeypatc
     assert cli.handle(parse("doctor"), cli.Effects(run=FakeRun(), ask=no_questions)) == 0
 
 
+def test_doctor_checks_plugins_in_an_installed_home_without_a_pack_file(tmp_home, monkeypatch, capsys):
+    home = tmp_home / ".hermes"
+    plugin = home / "plugins" / "polytropos"
+    plugin.mkdir(parents=True)
+    shutil.copy(ROOT / "versions.lock", plugin)
+    monkeypatch.setattr(cli, "_HERE", plugin / "cli.py")  # installed: no checkout and no hermes-pack.yaml around
+    (home / "config.yaml").write_text(yaml.safe_dump({"model": {"provider": "polytropos-router"}}))
+    ponytail, superpowers = LOCK["plugins"]["ponytail"], LOCK["plugins"]["superpowers"]
+    meta = {"polytropos": {"source": "https://github.com/Lil-Clanky/polytropos.git#plugins/polytropos",
+                           "revision": SHA_NEW},
+            "polytropos-router": {"source": "https://github.com/Lil-Clanky/polytropos.git#plugins/polytropos_router",
+                                  "revision": SHA_OLD},
+            "ponytail": {"source": ponytail["repo"], "revision": ponytail["commit"]},
+            "superpowers": {"source": superpowers["repo"] + ".git", "revision": superpowers["commit"]}}
+    (home / "plugins" / ".install-metadata.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(doctor, "CHECKS", (doctor.check_plugins,))
+    assert cli.handle(parse("doctor"), cli.Effects(run=FakeRun(), ask=no_questions)) == 0
+    out = capsys.readouterr().out
+    assert "ok    plugins: polytropos, ponytail, superpowers" in out
+    assert "warn  plugin polytropos-router is at aaaaaaa, the pack pins bbbbbbb" in out
+    assert "pack file" not in out
+    (home / "plugins" / ".install-metadata.json").write_text("{}")  # as in a run from a checkout
+    assert cli.handle(parse("doctor"), cli.Effects(run=FakeRun(), ask=no_questions)) == 1
+    out = capsys.readouterr().out
+    assert "fail  plugin Lil-Clanky/polytropos#plugins/polytropos is not installed\n        hermes polytropos update" in out
+    assert "fail  plugin Lil-Clanky/polytropos#plugins/polytropos_router is not installed" in out
+
+
 # --- install ---
 
 def test_install_refuses_when_another_program_holds_port_3001(tmp_home, capsys):
