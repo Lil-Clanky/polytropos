@@ -1,0 +1,8 @@
+name: polytropos
+kind: standalone
+version: 0.1.0
+description: Doctor, FreeLLMAPI service, memory guard and sleep hold for Polytropos
+author: Lil-Clanky
+manifest_version: 2
+api_version: 1
+provides_hooks: [pre_llm_call, pre_api_request, post_llm_call, on_session_end]
