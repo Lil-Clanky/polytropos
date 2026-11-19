@@ -59,6 +59,8 @@ def parse_slot(text: str) -> Slot:
 
 
 def _slot(text, path: str, upstreams: dict) -> Slot:
+    if not isinstance(text, str):
+        raise ConfigError(f"{path}: expected a string")  # never echo the value, it may hold a secret
     try:
         slot = parse_slot(text)
     except ValueError as e:
@@ -81,11 +83,14 @@ def _typed(value, kind: type, path: str):
     return value
 
 
-def _classifier(raw, upstreams: dict) -> tuple[Slot | None, int, float]:
-    if raw is None:
-        default = DEFAULT_CONFIG.classifier
-        usable = default if default.upstream in upstreams else None
-        return usable, 16, 8.0
+_ABSENT = object()
+
+
+def _classifier(raw, upstreams: dict, use_defaults: bool) -> tuple[Slot | None, int, float]:
+    if raw is _ABSENT:
+        return (DEFAULT_CONFIG.classifier if use_defaults else None), 16, 8.0
+    if raw is None or raw is False or raw == "":  # explicitly off
+        return None, 16, 8.0
     if isinstance(raw, dict):
         slot = _slot(_typed(raw.get("model"), str, "classifier.model"), "classifier.model", upstreams)
         return (slot,
@@ -97,7 +102,8 @@ def _classifier(raw, upstreams: dict) -> tuple[Slot | None, int, float]:
 def parse_config(raw: dict) -> RouterConfig:
     raw = _mapping(raw, "config")
     raw_upstreams = raw.get("upstreams")
-    upstreams = dict(DEFAULT_CONFIG.upstreams) if raw_upstreams is None else {}
+    use_defaults = raw_upstreams is None  # defaults for routes and classifier only go with the default upstreams
+    upstreams = dict(DEFAULT_CONFIG.upstreams) if use_defaults else {}
     for name, body in ({} if raw_upstreams is None else _mapping(raw_upstreams, "upstreams")).items():
         path = f"upstreams.{name}"
         body = _mapping(body, path)
@@ -112,8 +118,12 @@ def parse_config(raw: dict) -> RouterConfig:
             str(body.get("runtime", "")), window,
         )
     raw_routes = raw.get("routes")
-    routes = dict(DEFAULT_CONFIG.routes) if raw_routes is None else {}
-    for tier, slots in ({} if raw_routes is None else _mapping(raw_routes, "routes")).items():
+    if raw_routes is None and not use_defaults:
+        raise ConfigError("routes: required when upstreams is set")
+    routes = {}
+    for tier, slots in (DEFAULT_CONFIG.routes if raw_routes is None else _mapping(raw_routes, "routes")).items():
+        if raw_routes is None:
+            slots = [f"{s.upstream}/{s.model}" for s in slots]
         if not isinstance(slots, list) or not slots:
             raise ConfigError(f"routes.{tier}: expected a non-empty list")
         routes[tier] = tuple(_slot(s, f"routes.{tier}[{i}]", upstreams) for i, s in enumerate(slots))
@@ -124,7 +134,7 @@ def parse_config(raw: dict) -> RouterConfig:
     for platform, tier in hints.items():
         if _typed(tier, str, f"channel_hints.{platform}") not in routes:
             raise ConfigError(f"channel_hints.{platform}: no route named {tier!r}")
-    classifier, max_tokens, timeout_s = _classifier(raw.get("classifier"), upstreams)
+    classifier, max_tokens, timeout_s = _classifier(raw.get("classifier", _ABSENT), upstreams, use_defaults)
     return RouterConfig(
         upstreams=upstreams,
         routes=routes,
@@ -147,9 +157,10 @@ def load_config(hermes_home: Path) -> tuple[RouterConfig, list[str]]:
         return DEFAULT_CONFIG, []
     except Exception as e:  # unparsable YAML must not stop Hermes
         # Never format the exception: its message quotes the offending line, which may hold a secret.
+        # Not even e.problem: ruamel's duplicate-key error quotes both values.
         mark = getattr(e, "problem_mark", None)
         where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
-        return DEFAULT_CONFIG, [f"config.yaml: {getattr(e, 'problem', None) or type(e).__name__}{where}"]
+        return DEFAULT_CONFIG, [f"config.yaml: {type(e).__name__}{where}"]
     try:
         return parse_config(section or {}), []
     except ConfigError as e:

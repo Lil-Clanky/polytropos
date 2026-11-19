@@ -1,4 +1,5 @@
 import pytest
+from polytropos_router import config as config_mod
 import yaml
 
 from polytropos_router.config import (
@@ -157,3 +158,47 @@ def test_yaml_error_does_not_echo_secret(tmp_path):
     cfg, errors = load_config(tmp_path)
     assert cfg == DEFAULT_CONFIG and len(errors) == 1
     assert "SECRET123" not in errors[0] and "line 3" in errors[0]
+
+
+def test_loader_error_text_never_printed(tmp_path, monkeypatch):
+    class Boom(Exception):
+        problem = 'found duplicate key "api_key" with value "sk-live-NEW222"'
+        problem_mark = type("M", (), {"line": 3, "column": 4})()
+
+    def loader(_text):
+        raise Boom()
+
+    monkeypatch.setattr(config_mod, "safe_load", loader)
+    _write(tmp_path, "x: 1\n")
+    cfg, errors = load_config(tmp_path)
+    assert cfg == DEFAULT_CONFIG and errors == ["config.yaml: Boom at line 4, column 5"]
+
+
+def test_upstreams_without_routes_is_error(tmp_path):
+    raw = {"upstreams": {"ollama": {"base_url": "http://127.0.0.1:11434/v1", "local": True}}}
+    with pytest.raises(ConfigError, match="routes: required when upstreams is set"):
+        parse_config(raw)
+    _write(tmp_path, yaml.safe_dump({"plugins": {"entries": {"polytropos-router": raw}}}))
+    cfg, errors = load_config(tmp_path)
+    assert cfg == DEFAULT_CONFIG and len(errors) == 1
+
+
+def test_default_routes_checked_against_upstreams():
+    raw = {"upstreams": {"ollama": {"base_url": "http://x/v1"}}, "routes": {"simple": ["freellmapi/auto"]}}
+    with pytest.raises(ConfigError, match=r"routes\.simple\[0\]"):
+        parse_config(raw)
+
+
+@pytest.mark.parametrize("entry", [{"model": "ollama/x", "api_key": "sk-SECRET"}, ["sk-SECRET"], 5])
+def test_route_entry_not_string_does_not_echo(entry):
+    raw = {**SPEC, "routes": {"simple": [entry], "complex": ["freellmapi/auto"]}}
+    with pytest.raises(ConfigError, match=r"routes\.simple\[0\]: expected a string") as e:
+        parse_config(raw)
+    assert "SECRET" not in str(e.value)
+
+
+@pytest.mark.parametrize("off", [None, False, ""])
+def test_classifier_can_be_turned_off(off):
+    assert parse_config({**SPEC, "classifier": off}).classifier is None
+    assert parse_config({"classifier": off}).classifier is None
+    assert parse_config({}).classifier == DEFAULT_CONFIG.classifier
