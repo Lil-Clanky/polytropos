@@ -1,4 +1,5 @@
 import json
+import logging
 import stat
 import threading
 import time
@@ -277,6 +278,16 @@ def test_canary_filter_never_empties_chain(local, cloud):
     assert acted(cloud) == ["auto"]
 
 
+def test_canary_failing_slot_is_the_last_resort(local, cloud):
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"status": 429}, {"content": "local again"})
+    create = router(local, cloud, local_results=lambda: {"freellmapi/auto": "fail"}).chat.completions.create
+    reply = create(model="auto", messages=turn("write it down"), tools=TOOLS)
+    assert reply.choices[0].message.content == "ok" and acted(local) == [MODEL] and acted(cloud) == ["auto"]
+    create(model="auto", messages=turn("write it down") + TOOL_STEP, tools=TOOLS)
+    assert acted(local) == [MODEL, MODEL]  # pinned, it still waits behind the slot that passes
+
+
 def test_stream_error_after_text_reaches_caller(local, cloud):
     cloud.script(CLS, SIMPLE)
     local.script(MODEL, {"content": "hello world", "fail_after": 2})
@@ -397,6 +408,16 @@ def test_close_aborts_in_flight_requests(local, cloud):
     with pytest.raises(RouterError):
         rc.chat.completions.create(model="auto", messages=turn("hoi"))
     assert acted(local) + acted(cloud) == [MODEL] and len(classified(cloud)) == 1
+
+
+def test_close_without_httpx_internals_warns_once(local, cloud, caplog):
+    client_mod._warn_abort_lost.cache_clear()
+    answer = NS(choices=[NS(message=NS(content="simple", tool_calls=None))])
+    rc = router(local, cloud, openai_factory=lambda **kw: NS(chat=NS(completions=NS(create=lambda **kw: answer))))
+    rc.chat.completions.create(model="auto", messages=turn("hoi"))  # one upstream client per upstream
+    with caplog.at_level(logging.WARNING):
+        rc.close()
+    assert [r.levelname for r in caplog.records] == ["WARNING"] and "hoi" not in caplog.text
 
 
 def test_local_classifier_obeys_guard(local, cloud):

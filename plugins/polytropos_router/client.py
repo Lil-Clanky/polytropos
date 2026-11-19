@@ -2,6 +2,7 @@
 
 import contextlib
 import functools
+import logging
 import os
 import socket
 import threading
@@ -25,6 +26,7 @@ from .toolcheck import broken_tool_calls
 
 DECISIONS = DecisionCache()  # shared by every client: Hermes builds several per session
 WATCHDOG_INTERVAL_S = 2.0
+logger = logging.getLogger("hermes_plugins.polytropos_router")
 
 
 class RouterError(RuntimeError):
@@ -74,19 +76,27 @@ def _ollama_fit(up: Upstream, model: str) -> bool | None:
     return guard.ollama_fit(up.base_url, model, up.context_window, total_ram=guard.total_ram_bytes())
 
 
+@functools.cache  # once per process
+def _warn_abort_lost() -> None:
+    logger.warning("polytropos-router: cannot abort upstream requests: the httpx internals it uses are missing")
+
+
 def _abort(client: Any) -> None:
     """Abort the client's requests in flight: their calls raise APIConnectionError."""
     # shutdown(), not close(): close() leaves a read that blocks on another thread hanging, or waiting on
     # a recycled fd (both seen on macOS). A dropped client closes itself once no request holds it any
     # more (openai closes its client on garbage collection), like Hermes's retired shared clients.
-    # shortcut: reads private httpx attributes and aborts nothing if they move; replace when httpx
+    # shortcut: reads private httpx attributes and only warns if they move; replace when httpx
     # gets a public way to abort a request
-    pool = getattr(getattr(getattr(client, "_client", None), "_transport", None), "_pool", None)
-    for conn in list(getattr(pool, "_connections", None) or []):
-        try:
-            conn._connection._network_stream.get_extra_info("socket").shutdown(socket.SHUT_RDWR)
-        except (AttributeError, OSError):
-            pass  # not connected yet, or already closed
+    try:
+        streams = [c._connection._network_stream for c in list(client._client._transport._pool._connections)
+                   if c._connection is not None]  # None until it connects
+    except AttributeError:
+        _warn_abort_lost()
+        return
+    for stream in streams:
+        with contextlib.suppress(AttributeError, OSError):  # no socket, or already closed
+            stream.get_extra_info("socket").shutdown(socket.SHUT_RDWR)
 
 
 class RouterClient:
@@ -197,12 +207,11 @@ class RouterClient:
         need = estimate_tokens(call.kwargs.get("messages") or [], tools) + (call.kwargs.get("max_tokens") or 1024)
         hard = [s for s in dict.fromkeys(chain) if self._usable(s, need)]
         matrix, results = functools.cache(self._matrix_loader), functools.cache(self._local_results)
-        soft = [s for s in hard if not tools or self._canary_ok(s, matrix, results)]
-        slots = soft or hard  # a failing canary never empties the route
-        if decision.pinned in slots:
+        slots = [s for s in hard if not tools or self._canary_ok(s, matrix, results)] or hard
+        if decision.pinned in slots:  # only among the slots that pass, so a demoted one stays last
             slots.remove(decision.pinned)
             slots.insert(0, decision.pinned)
-        return slots
+        return slots + [s for s in hard if s not in slots]  # a failing canary demotes a slot to the last resort
 
     def _usable(self, slot: Slot, need: int) -> bool:
         """The hard filters, for local slots: memory guard, window and fit."""
