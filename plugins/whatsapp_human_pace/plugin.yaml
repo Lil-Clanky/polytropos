@@ -1,0 +1,7 @@
+name: whatsapp-human-pace
+version: 1.0.0
+description: "Holds incoming WhatsApp messages, answers after a random delay of 5 to 10 minutes, and batches what arrived in the meantime into one turn."
+author: Lil-Clanky
+provides_hooks:
+  - pre_gateway_dispatch
+  - transform_llm_output
