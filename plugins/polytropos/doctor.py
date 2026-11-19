@@ -74,8 +74,15 @@ def check_hermes(ctx: DoctorContext) -> list[CheckResult]:
     return [CheckResult("warn", f"Hermes v{v} is {kind} the tested versions ({', '.join(ctx.tested_hermes)})")]
 
 
-def _plugin_name(entry: dict) -> str:
-    return Path(entry.get("subdir") or str(entry["repo"]).removesuffix(".git")).name
+_GITHUB_HTTPS = re.compile(r"^https://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s#]+?)(?:\.git)?$")
+
+
+def _repo_subdir(source: str, subdir: str | None = None) -> tuple[str, str | None]:
+    """Same normalisation as hermes_cli/plugin_packs.py:430-440 (_source_to_repo_subdir)."""
+    base, _, sub = source.partition("#")
+    sub = (subdir if subdir is not None else sub).strip("/") or None
+    m = _GITHUB_HTTPS.match(base.strip())
+    return (f"{m.group('owner')}/{m.group('repo')}" if m else base.strip()), sub
 
 
 def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
@@ -88,14 +95,19 @@ def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
         return [CheckResult("fail", "plugin install metadata is unreadable", type(e).__name__)]
     if not isinstance(metadata, dict):
         return [CheckResult("fail", "plugin install metadata is unreadable", "expected a JSON object")]
+    # Records are keyed by the installed folder name, which the manifest decides, so match on source.
+    installed = {_repo_subdir(str(r.get("source") or "")): (name, r)
+                 for name, r in metadata.items() if isinstance(r, dict)}
     results, good = [], []
     for entry in ctx.pack.get("plugins", []):
-        name, pinned = _plugin_name(entry), str(entry["ref"]).lower()
-        record = metadata.get(name)
-        if not isinstance(record, dict):
-            results.append(CheckResult("fail", f"plugin {name} is not installed",
+        key = _repo_subdir(str(entry["repo"]), entry.get("subdir") or "")
+        pinned = str(entry["ref"]).lower()
+        label = key[0] + (f"#{key[1]}" if key[1] else "")
+        if key not in installed:
+            results.append(CheckResult("fail", f"plugin {label} is not installed",
                                        fix="hermes plugins pack install polytropos/hermes-pack.yaml"))
             continue
+        name, record = installed[key]
         revision = str(record.get("revision") or "").lower()
         if revision != pinned:
             results.append(CheckResult("warn", f"plugin {name} is at {revision[:7] or 'an unknown commit'}, "

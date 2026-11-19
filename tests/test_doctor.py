@@ -71,15 +71,22 @@ def test_hermes_tested_newer_missing(ctx):
     assert only(d.check_hermes(ctx)).status == "fail"
 
 
-def test_plugins_compare_commits_with_the_pack(ctx):
+def test_plugins_match_records_by_source(ctx):
+    pack = {"plugins": PACK["plugins"] + [{"repo": "owner/thing", "ref": SHA}]}
+    ctx.pack = pack
     meta = {"polytropos": {"source": "https://github.com/Lil-Clanky/polytropos#plugins/polytropos", "revision": SHA},
-            "polytropos-router": {"revision": SHA2}}
-    (ctx.hermes_home / "plugins" / ".install-metadata.json").write_text(json.dumps(meta))
+            "polytropos-router": {"source": "https://github.com/Lil-Clanky/polytropos.git#plugins/polytropos_router/",
+                                  "revision": SHA2},
+            "thing": {"source": "https://github.com/owner/thing.git", "revision": SHA}}
+    ctx.pack["plugins"][1] = {"repo": "Lil-Clanky/polytropos", "ref": SHA, "subdir": "plugins/polytropos_router"}
+    meta_path = ctx.hermes_home / "plugins" / ".install-metadata.json"
+    meta_path.write_text(json.dumps(meta))
     ok, warn = d.check_plugins(ctx)
-    assert ok.status == "ok" and "polytropos" in ok.label
+    assert ok.status == "ok" and ok.label == "plugins: polytropos, thing"
     assert warn.status == "warn" and "polytropos-router" in warn.label and "bbbbbbb" in warn.label
-    (ctx.hermes_home / "plugins" / ".install-metadata.json").write_text("{}")
-    assert [r.status for r in d.check_plugins(ctx)] == ["fail", "fail"]
+    meta_path.write_text("{}")
+    got = d.check_plugins(ctx)
+    assert [r.status for r in got] == ["fail"] * 3 and "not installed" in got[1].label
 
 
 def test_freellmapi_not_running(ctx):
