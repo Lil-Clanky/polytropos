@@ -26,7 +26,10 @@ from .toolcheck import broken_tool_calls
 
 DECISIONS = DecisionCache()  # shared by every client: Hermes builds several per session
 WATCHDOG_INTERVAL_S = 2.0
+MATRIX_TTL_S = 300.0  # a failed matrix fetch can take 10 s, so all clients together try at most this often
 logger = logging.getLogger("hermes_plugins.polytropos_router")
+_matrices: dict[Callable[[], canary.Matrix], tuple[float, canary.Matrix]] = {}  # loader -> (loaded at, matrix)
+_matrices_lock = threading.Lock()
 
 
 class RouterError(RuntimeError):
@@ -76,9 +79,24 @@ def _ollama_fit(up: Upstream, model: str) -> bool | None:
     return guard.ollama_fit(up.base_url, model, up.context_window, total_ram=guard.total_ram_bytes())
 
 
+def _matrix(loader: Callable[[], canary.Matrix]) -> canary.Matrix:
+    with _matrices_lock:  # held during the load: other threads wait for this fetch instead of making their own
+        loaded = _matrices.get(loader)
+        if loaded is None or time.monotonic() - loaded[0] >= MATRIX_TTL_S:
+            loaded = _matrices[loader] = (time.monotonic(), loader())
+        return loaded[1]
+
+
 @functools.cache  # once per process
 def _warn_abort_lost() -> None:
-    logger.warning("polytropos-router: cannot abort upstream requests: the httpx internals it uses are missing")
+    logger.warning("polytropos-router: an upstream request could not be aborted: its socket was not found")
+
+
+def _socket_of(conn: Any) -> Any:
+    """The socket under a pooled connection, None while it connects. A proxy connection wraps another one."""
+    while conn is not None and not hasattr(conn, "_network_stream"):
+        conn = conn._connection
+    return None if conn is None else conn._network_stream.get_extra_info("socket")
 
 
 def _abort(client: Any) -> None:
@@ -89,14 +107,18 @@ def _abort(client: Any) -> None:
     # shortcut: reads private httpx attributes and only warns if they move; replace when httpx
     # gets a public way to abort a request
     try:
-        streams = [c._connection._network_stream for c in list(client._client._transport._pool._connections)
-                   if c._connection is not None]  # None until it connects
+        http = client._client
+        # a proxy (environment or system settings) puts a transport on a mount; a mounted proxy can be the pool
+        pools = [getattr(t, "_pool", t) for t in (http._transport, *http._mounts.values()) if t is not None]
+        sockets = [_socket_of(conn) for pool in pools for conn in list(pool._connections)]
     except AttributeError:
+        sockets = [None]  # the internals moved
+    if None in sockets:
         _warn_abort_lost()
-        return
-    for stream in streams:
-        with contextlib.suppress(AttributeError, OSError):  # no socket, or already closed
-            stream.get_extra_info("socket").shutdown(socket.SHUT_RDWR)
+    for sock in sockets:
+        if sock is not None:
+            with contextlib.suppress(OSError):  # already closed
+                sock.shutdown(socket.SHUT_RDWR)
 
 
 class RouterClient:
@@ -132,7 +154,7 @@ class RouterClient:
         for client in clients:
             _abort(client)  # each closes itself once no request holds it
 
-    def _client(self, name: str) -> Any:
+    def _upstream(self, name: str) -> Any:  # not `_client`: Hermes probes that name for an http client
         with self._lock:
             if self.is_closed:
                 raise RouterError("polytropos-router: the client is closed")
@@ -167,6 +189,7 @@ class RouterClient:
     def _stream(self, call: _Call, slot: Slot, result: Any, watchdog: contextlib.ExitStack,
                 rest: list[Slot]) -> GuardedStream:
         def retry():
+            watchdog.close()  # the slot being left needs no watchdog; the close in on_close is then a no-op
             call.retried = True
             call.fell_back_from.append(_label(call.slot))
             i, stream, retry_watchdog = self._first(call, rest)
@@ -206,7 +229,7 @@ class RouterClient:
             chain += cfg.routes.get("complex", ())
         need = estimate_tokens(call.kwargs.get("messages") or [], tools) + (call.kwargs.get("max_tokens") or 1024)
         hard = [s for s in dict.fromkeys(chain) if self._usable(s, need)]
-        matrix, results = functools.cache(self._matrix_loader), functools.cache(self._local_results)
+        matrix, results = functools.partial(_matrix, self._matrix_loader), functools.cache(self._local_results)
         slots = [s for s in hard if not tools or self._canary_ok(s, matrix, results)] or hard
         if decision.pinned in slots:  # only among the slots that pass, so a demoted one stays last
             slots.remove(decision.pinned)
@@ -247,7 +270,7 @@ class RouterClient:
         up = self.cfg.upstreams[slot.upstream]
         if up.local and not guard.judge(self._guard_read()).allowed:  # fresh signals right before a local call
             raise _Refused
-        client = self._client(slot.upstream)
+        client = self._upstream(slot.upstream)
         with contextlib.ExitStack() as stack:
             if up.local:
                 stack.enter_context(guard.Watchdog(interval_s=WATCHDOG_INTERVAL_S, read=self._guard_read,

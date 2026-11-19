@@ -1,11 +1,13 @@
 import json
 import logging
+import socket
 import stat
 import threading
 import time
 from types import SimpleNamespace as NS
 from unittest.mock import ANY
 
+import httpx2
 import openai
 import pytest
 
@@ -199,6 +201,7 @@ def test_upstream_clients_use_env_lookup_without_retries(local, cloud):
 
     rc = router(local, cloud, openai_factory=factory, env_lookup={"FREELLMAPI_API_KEY": "from-env"}.get)
     assert made == [] and rc.base_url == "polytropos://router" and rc.is_closed is False
+    assert not hasattr(rc, "_client")  # Hermes probes `_client` for an http client
     assert RouterClient.HERMES_SKIP_TRANSPORT_WRAP is True and RouterClient.HERMES_SKIP_ASYNC_WRAP is True
     cloud.script(CLS, SIMPLE, SIMPLE)
     rc.chat.completions.create(model="auto", messages=turn("hoi"))
@@ -288,6 +291,26 @@ def test_canary_failing_slot_is_the_last_resort(local, cloud):
     assert acted(local) == [MODEL, MODEL]  # pinned, it still waits behind the slot that passes
 
 
+def test_matrix_loads_once_per_ttl(local, cloud, monkeypatch):
+    cloud.script(CLS, SIMPLE, SIMPLE, SIMPLE)
+    loads = []
+
+    def loader():
+        loads.append(1)
+        return Matrix([])
+
+    def create(text):  # a new client for every call, as Hermes does
+        router(local, cloud, matrix_loader=loader).chat.completions.create(
+            model="auto", messages=turn(text), tools=TOOLS)
+
+    create("one")
+    create("two")
+    assert len(loads) == 1
+    monkeypatch.setattr(client_mod, "MATRIX_TTL_S", 0)
+    create("three")
+    assert len(loads) == 2
+
+
 def test_stream_error_after_text_reaches_caller(local, cloud):
     cloud.script(CLS, SIMPLE)
     local.script(MODEL, {"content": "hello world", "fail_after": 2})
@@ -314,7 +337,8 @@ def test_stream_error_before_output_moves_to_next_model(local, cloud, tmp_path):
     assert acted(local) == [MODEL] and acted(cloud) == ["auto", "auto"]  # the turn stays on the model that answered
 
 
-def test_stream_watchdog_runs_until_close(local, cloud, monkeypatch):
+@pytest.fixture
+def watchdog_log(monkeypatch):
     log = []
 
     class Recording(guard.Watchdog):
@@ -327,15 +351,31 @@ def test_stream_watchdog_runs_until_close(local, cloud, monkeypatch):
             super().__exit__(*exc)
 
     monkeypatch.setattr(guard, "Watchdog", Recording)
-    cloud.script(CLS, SIMPLE, SIMPLE)
-    local.script(MODEL, {"content": "hi"}, {"status": 429})
-    rc = router(local, cloud)
-    stream = rc.chat.completions.create(model="auto", messages=turn("one"), stream=True)
-    assert log == ["on"]
-    assert text_of(stream) == "hi" and log == ["on", "off"]
-    log.clear()
-    stream = rc.chat.completions.create(model="auto", messages=turn("two"), stream=True)  # local answers 429
-    assert log == ["on", "off"] and text_of(stream) == "ok"
+    return log
+
+
+def test_stream_watchdog_runs_until_close(local, cloud, watchdog_log):
+    cloud.script(CLS, SIMPLE, SIMPLE, SIMPLE)
+    local.script(MODEL, {"content": "hi"}, {"status": 429}, {"content": "never read"})
+    create = router(local, cloud).chat.completions.create
+    stream = create(model="auto", messages=turn("one"), stream=True)
+    assert watchdog_log == ["on"]
+    assert text_of(stream) == "hi" and watchdog_log == ["on", "off"]
+    watchdog_log.clear()
+    stream = create(model="auto", messages=turn("two"), stream=True)  # local answers 429
+    assert watchdog_log == ["on", "off"] and text_of(stream) == "ok"
+    watchdog_log.clear()
+    create(model="auto", messages=turn("three"), stream=True).close()  # closed without reading
+    assert watchdog_log == ["on", "off"]
+
+
+def test_stream_watchdog_stops_when_the_retry_starts(local, cloud, watchdog_log):
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"content": "lost", "fail_after": 1})
+    local.script("qwen3:4b", {"content": "second"})
+    cfg = config(local, cloud, simple=(Slot("ollama", MODEL), Slot("ollama", "qwen3:4b")))
+    stream = router(local, cloud, cfg).chat.completions.create(model="auto", messages=turn("hoi"), stream=True)
+    assert text_of(stream) == "second" and watchdog_log == ["on", "off", "on", "off"]
 
 
 def test_stream_retry_checks_guard_again(local, cloud):
@@ -383,10 +423,15 @@ def test_concurrent_sessions_keep_their_decisions(local, cloud):
     assert len(client_mod.DECISIONS) == n
 
 
-def test_close_aborts_in_flight_requests(local, cloud):
+@pytest.mark.parametrize("mounted", [False, True], ids=["default", "proxy-mount"])
+def test_close_aborts_in_flight_requests(local, cloud, mounted):
+    def factory(**kw):  # a proxy from the environment or the system settings puts the transport on a mount
+        http = openai.DefaultHttpxClient(mounts={"http://": httpx2.HTTPTransport()}) if mounted else None
+        return openai.OpenAI(**kw, http_client=http)
+
     cloud.script(CLS, SIMPLE)
     local.script(MODEL, {"content": "slow", "delay": 3})
-    rc = router(local, cloud)
+    rc = router(local, cloud, openai_factory=factory)
     errors = []
 
     def work():
@@ -418,6 +463,22 @@ def test_close_without_httpx_internals_warns_once(local, cloud, caplog):
     with caplog.at_level(logging.WARNING):
         rc.close()
     assert [r.levelname for r in caplog.records] == ["WARNING"] and "hoi" not in caplog.text
+
+
+def test_abort_reaches_the_socket_under_a_proxy_connection(caplog):
+    client_mod._warn_abort_lost.cache_clear()
+    ours, theirs = socket.socketpair()
+    with ours, theirs:
+        # httpcore's proxy shape: ForwardHTTPConnection -> HTTPConnection -> HTTP11Connection
+        proxied = NS(_connection=NS(_connection=NS(_network_stream=NS(get_extra_info={"socket": ours}.get))))
+        connecting = NS(_connection=None)
+        proxy_pool = NS(_connections=[connecting, proxied])  # a mounted proxy pool can be the transport itself
+        http = NS(_transport=NS(_pool=NS(_connections=[])), _mounts={"all://localhost": None, "http://": proxy_pool})
+        with caplog.at_level(logging.WARNING):
+            client_mod._abort(NS(_client=http))
+        theirs.setblocking(False)
+        assert theirs.recv(1) == b""  # shut down: the peer reads the end of the stream
+    assert [r.levelname for r in caplog.records] == ["WARNING"]  # the connecting one could not be reached
 
 
 def test_local_classifier_obeys_guard(local, cloud):
