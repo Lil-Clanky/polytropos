@@ -16,9 +16,10 @@ ROOT = Path(__file__).resolve().parent.parent
 GITHUB = "https://api.github.com/repos/"
 Fetch = Callable[[str], bytes]
 
-# component -> (lock section, GitHub repo or None for PyPI, key holding the current value)
+# component -> (lock section, GitHub repo or None for a package registry, key holding the current value)
 COMPONENTS = {
     "freellmapi": ("freellmapi", "tashfeenahmed/freellmapi", "tag"),
+    "freellmapi-cli": ("freellmapi", None, "cli_version"),
     "rtk": ("rtk", "rtk-ai/rtk", "version"),
     "graphify": ("graphify", None, "version"),
     "ast-grep": ("ast-grep", None, "version"),
@@ -55,6 +56,10 @@ def pypi_version(package: str, fetch: Fetch) -> str:
     return json.loads(fetch(f"https://pypi.org/pypi/{package}/json"))["info"]["version"]
 
 
+def npm_version(package: str, fetch: Fetch) -> str:
+    return json.loads(fetch(f"https://registry.npmjs.org/{package}/latest"))["version"]
+
+
 def update_lock(path: Path, section: str, values: dict[str, str]) -> bool:
     """Rewrite `key = "value"` lines inside one section only. Returns whether the file changed."""
     out, inside = [], False
@@ -82,7 +87,12 @@ def find_updates(lock_path: Path, fetch: Fetch) -> list[dict[str, str]]:
         for part in section.split("."):
             table = table[part]
         current = table[key]
-        latest = latest_tag(repo, fetch) if repo else pypi_version(table["package"], fetch)
+        if repo:
+            latest = latest_tag(repo, fetch)
+        elif name == "freellmapi-cli":
+            latest = npm_version("freellmapi", fetch)
+        else:
+            latest = pypi_version(table["package"], fetch)
         if newer(latest, current):
             found.append({"component": name, "current": current, "latest": latest})
     return found

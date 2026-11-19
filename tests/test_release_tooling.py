@@ -87,7 +87,7 @@ def test_latest_tag_uses_release_then_tags():
 def test_find_updates_reports_only_newer(tmp_path):
     lock = tmp_path / "versions.lock"
     lock.write_text(
-        '[freellmapi]\ntag = "v0.16.36"\n[rtk]\nversion = "1.2.1"\n'
+        '[freellmapi]\ntag = "v0.16.36"\ncli_version = "0.8.2"\n[rtk]\nversion = "1.2.1"\n'
         '[graphify]\npackage = "graphifyy"\nversion = "0.9.112"\n'
         '[ast-grep]\npackage = "ast-grep-cli"\nversion = "0.51.3"\n'
         '[plugins.ponytail]\ntag = "v5.3.3"\n[plugins.superpowers]\ntag = "v7.0.2"\n'
@@ -95,6 +95,7 @@ def test_find_updates_reports_only_newer(tmp_path):
     gh = "https://api.github.com/repos/"
     fetch = fake_fetch({
         gh + "tashfeenahmed/freellmapi/releases/latest": {"tag_name": "v0.16.37"},
+        "https://registry.npmjs.org/freellmapi/latest": {"version": "0.8.3"},
         gh + "rtk-ai/rtk/releases/latest": {"tag_name": "v1.2.1"},
         gh + "DietrichGebert/ponytail/releases/latest": {"tag_name": "v5.3.3"},
         gh + "obra/superpowers/releases/latest": {"tag_name": "v7.1.0"},
@@ -103,6 +104,7 @@ def test_find_updates_reports_only_newer(tmp_path):
     })
     assert cu.find_updates(lock, fetch) == [
         {"component": "freellmapi", "current": "v0.16.36", "latest": "v0.16.37"},
+        {"component": "freellmapi-cli", "current": "0.8.2", "latest": "0.8.3"},
         {"component": "graphify", "current": "0.9.112", "latest": "0.9.113"},
         {"component": "superpowers", "current": "v7.0.2", "latest": "v7.1.0"},
     ]
@@ -152,3 +154,10 @@ def test_apply_update_writes_lock_and_pack(tmp_path):
     cu.apply_update(lock, pack, {"component": "ponytail", "current": "v1.0.0", "latest": "v1.1.0"}, fetch)
     assert lock.read_text() == f'[plugins.ponytail]\ntag = "v1.1.0"\ncommit = "{SHA_B}"\n'
     assert SHA_B in pack.read_text()
+
+
+def test_apply_freellmapi_cli_rewrites_only_cli_version(tmp_path):
+    lock = tmp_path / "versions.lock"
+    lock.write_text('[freellmapi]\ntag = "v1"\ncommit = "c"\ncli_version = "0.8.2"\n')
+    cu.apply_update(lock, tmp_path / "none.yaml", {"component": "freellmapi-cli", "current": "0.8.2", "latest": "0.8.3"}, fake_fetch({}))
+    assert lock.read_text() == '[freellmapi]\ntag = "v1"\ncommit = "c"\ncli_version = "0.8.3"\n'

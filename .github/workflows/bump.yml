@@ -56,9 +56,15 @@ jobs:
           node server/dist/index.js &
           pid=$!
           trap 'kill $pid' EXIT
-          for i in $(seq 1 30); do curl -fs http://127.0.0.1:3001/v1/models && exit 0; sleep 1; done
-          echo "GET /v1/models did not answer" >&2
-          exit 1
+          for i in $(seq 1 30); do
+            curl -fs -o /dev/null http://127.0.0.1:3001/livez && break
+            sleep 1
+          done
+          curl -fs -o /dev/null http://127.0.0.1:3001/livez
+          # /v1/models needs the unified key: 200 or 401 with a JSON body shows the route and its auth gate are mounted
+          code=$(curl -s -o body.json -w '%{http_code}' http://127.0.0.1:3001/v1/models)
+          python3 -c 'import json; json.load(open("body.json"))'
+          [ "$code" = 200 ] || [ "$code" = 401 ]
       - name: Open or update the pull request
         run: |
           branch="bump/${{ matrix.component }}"
