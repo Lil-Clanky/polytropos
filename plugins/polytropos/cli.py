@@ -239,7 +239,39 @@ def _own_freellmapi(state: State, profile: str, tag: str) -> None:
     set_mode(state, "freellmapi", "managed")
 
 
+def _added_by(command: list[str], home: Path) -> Path | str | None:
+    """What an integration command adds for this profile: a folder, or the config key of an MCP server."""
+    if command[:3] == ["hermes", "skills", "install"]:  # official/<category>/<name> goes to skills/<category>/<name>
+        return home / "skills" / Path(*command[3].split("/")[1:])
+    if command[:3] == ["hermes", "mcp", "add"]:
+        return f"mcp_servers.{command[3]}"
+    if command[1:] == ["init", "--agent", "hermes"]:  # rtk's Hermes plugin
+        return home / "plugins" / "rtk"
+    if command == ["graphify", "install", "--platform", "hermes"]:  # graphify ignores HERMES_HOME
+        return Path.home() / ".hermes" / "skills" / "graphify"
+    return None
+
+
+def _present(target: Path | str, home: Path) -> bool:
+    return target.exists() if isinstance(target, Path) else _get(_read_config(home), target) is not None
+
+
+def _record_integrations(state: State, profile: str, added: list[tuple[list[str], Path | str]]) -> None:
+    for command, target in added:
+        if isinstance(target, str):  # an MCP server entry, undone with the other config changes
+            record_config_change(state, profile, target, None, _get(_read_config(Path(profile)), target))
+            continue
+        items = state.profiles.setdefault(profile, {}).setdefault("integrations", [])
+        if {"ran": command, "added": str(target)} not in items:
+            items.append({"ran": command, "added": str(target)})
+    save_state(state)
+
+
 def _install_program(p: programs.Program, state: State, profile: str, fx: Effects) -> bool:
+    home = Path(profile)
+    # Only what is missing now counts as added by this install, so uninstall leaves the user's own setup alone.
+    missing = [(command, target) for command in p.install_cmds
+               if (target := _added_by(command, home)) is not None and not _present(target, home)]
     try:
         before = programs.installed_version(p, fx.run)
         if programs.needs_install(p, fx.run):
@@ -248,6 +280,8 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
     except (subprocess.CalledProcessError, OSError, ValueError) as err:
         print(f"{p.name} was not installed: {err}")
         return False
+    finally:  # also after a failed step, for what the earlier steps added
+        _record_integrations(state, profile, [(c, t) for c, t in missing if _present(t, home)])
     use_shared(state, p.name, profile, version=p.version, installed_by_us=before is None)
     save_state(state)
     return True
@@ -460,6 +494,29 @@ def _remove_program(p: programs.Program, fx: Effects) -> None:
         print(f"Polytropos cannot remove {p.name} on this system. Remove it yourself.")
 
 
+def _undo_integration(item: dict, home: Path, fx: Effects) -> bool:
+    """Undo one recorded integration of this profile. False keeps the record, so the next uninstall tries again."""
+    ran, added = item["ran"], Path(item["added"])
+    if ran[:3] == ["hermes", "skills", "install"]:
+        command = ["hermes", "skills", "uninstall", added.name, "--yes"]
+    elif ran[1:] == ["init", "--agent", "hermes"]:
+        command = [*ran, "--uninstall"]  # rtk's own undo removes its Hermes plugin and its config entry
+    elif added.is_relative_to(home):
+        shutil.rmtree(added, ignore_errors=True)
+        return True
+    else:  # graphify writes to ~/.hermes whatever the profile, so the default profile may use this copy
+        print(f"{shlex.join(ran)} added {added}, which is outside this profile. "
+              "Remove it yourself if no other profile uses it.")
+        return True
+    try:
+        done = fx.run(command, check=False).returncode == 0
+    except OSError:
+        done = False
+    if not done:
+        print(f"Undoing {shlex.join(ran)} failed. Run this command yourself: {shlex.join(command)}")
+    return done
+
+
 def _remove_freellmapi(fl: FreeLLM) -> None:
     fl.services.remove()
     shutil.rmtree(fl.root / "releases", ignore_errors=True)
@@ -479,12 +536,11 @@ def _uninstall(args, fx: Effects) -> int:
             print(f"Restoring {key} failed. Run this command yourself: {shlex.join(command)}")
             kept.insert(0, change)
     record = state.profiles.setdefault(profile, {})
-    if kept:
-        record["config_changes"] = kept
-    else:
-        record.pop("config_changes", None)
-        if not record:
-            del state.profiles[profile]
+    left = [item for item in record.get("integrations", []) if not _undo_integration(item, home, fx)]
+    record.update(config_changes=kept, integrations=left)
+    state.profiles[profile] = {key: value for key, value in record.items() if value}
+    if not state.profiles[profile]:
+        del state.profiles[profile]
     save_state(state)
     lock = _repo_file("versions.lock")
     progs = {p.name: p for p in _programs(programs.load_lock(lock))} if lock else {}

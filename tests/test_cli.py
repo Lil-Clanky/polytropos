@@ -394,6 +394,60 @@ def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     assert "hermes plugins remove polytropos" in out and str(root / "data") in out
 
 
+def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home):
+    home = tmp_home / ".hermes"
+    own_skill = home / "skills" / "software-development" / "ast-grep"  # the user's own, there before the install
+    own_skill.mkdir(parents=True)
+    (home / "config.yaml").write_text(yaml.safe_dump({"mcp_servers": {"mine": {"command": "my-mcp"}}}))
+
+    def skill_installed(argv):
+        (home / "skills" / Path(*argv[3].split("/")[1:])).mkdir(parents=True, exist_ok=True)
+
+    def mcp_added(argv):
+        config = yaml.safe_load((home / "config.yaml").read_text())
+        config["mcp_servers"][argv[3]] = {"command": argv[5]}
+        (home / "config.yaml").write_text(yaml.safe_dump(config))
+
+    run = FakeRun(on={("hermes", "skills", "install"): skill_installed, ("hermes", "mcp", "add"): mcp_added,
+                      ("graphify", "install"): lambda argv: (home / "skills" / "graphify").mkdir(parents=True)})
+    assert cli.handle(parse("install", "--only", "graphify", "ast-grep", "qmd", "context7"),
+                      cli.Effects(run=run, ask=no_questions)) == 0
+    assert load_state().profiles[str(home)] == {
+        "integrations": [
+            {"ran": ["graphify", "install", "--platform", "hermes"], "added": str(home / "skills" / "graphify")},
+            {"ran": ["hermes", "skills", "install", "official/research/qmd"],
+             "added": str(home / "skills" / "research" / "qmd")}],
+        "config_changes": [{"key": "mcp_servers.context7", "old": None, "new": {"command": "context7-mcp"}}]}
+    run = FakeRun()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert [c for c in run.commands() if c[0] == "hermes"] == [
+        ["hermes", "config", "unset", "mcp_servers.context7"], ["hermes", "skills", "uninstall", "qmd", "--yes"]]
+    assert not (home / "skills" / "graphify").exists() and own_skill.is_dir()
+    assert str(home) not in load_state().profiles
+
+
+def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(tmp_home, monkeypatch, capsys):
+    home = tmp_home / ".hermes" / "profiles" / "work"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    graphify = tmp_home / ".hermes" / "skills" / "graphify"
+    graphify.mkdir(parents=True)
+    rtk = [str(tmp_home / ".local" / "bin" / "rtk"), "init", "--agent", "hermes"]
+    qmd = {"ran": ["hermes", "skills", "install", "official/research/qmd"],
+           "added": str(home / "skills" / "research" / "qmd")}
+    state = State()
+    state.profiles[str(home)] = {"integrations": [
+        {"ran": rtk, "added": str(home / "plugins" / "rtk")},
+        {"ran": ["graphify", "install", "--platform", "hermes"], "added": str(graphify)}, qmd]}
+    save_state(state)
+    run = FakeRun(fail=[("hermes", "skills", "uninstall")])
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands() == [[*rtk, "--uninstall"], ["hermes", "skills", "uninstall", "qmd", "--yes"]]
+    out = capsys.readouterr().out
+    assert graphify.is_dir() and f"added {graphify}, which is outside this profile" in out
+    assert "Run this command yourself: hermes skills uninstall qmd --yes" in out
+    assert load_state().profiles[str(home)] == {"integrations": [qmd]}
+
+
 # --- setup ---
 
 UPSTREAM = {"base_url": "http://127.0.0.1:3001/v1", "api_key_env": "FREELLMAPI_API_KEY"}
