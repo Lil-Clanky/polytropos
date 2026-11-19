@@ -24,8 +24,9 @@ class TurnInfo:
 def _store() -> types.ModuleType:
     store = sys.modules.setdefault("polytropos_bridge_store", types.ModuleType("polytropos_bridge_store"))
     if not hasattr(store, "lock"):
-        store.__dict__.setdefault("lock", threading.Lock())
+        # entries first: a reader that sees `lock` must also see `entries`
         store.__dict__.setdefault("entries", [])
+        store.__dict__.setdefault("lock", threading.Lock())
     return store
 
 

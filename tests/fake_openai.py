@@ -1,7 +1,12 @@
-"""Loopback fake of the OpenAI chat API, scripted per model."""
+"""Loopback fake of the OpenAI chat API, scripted per model.
+
+A streamed reply is a list of chunks: the initial role delta counts as chunk 1, then the text or
+tool-call deltas. `fail_after: n` sends n chunks and then drops the connection.
+"""
 
 import json
 import socketserver
+import sys
 import time
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +15,13 @@ from threading import Lock, Thread
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        # A client that hangs up (timeout, dropped stream) raises a connection error in the handler.
+        # Stay quiet for those; real handler bugs still get the default traceback.
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
 
     def server_bind(self) -> None:
         # HTTPServer.server_bind does a reverse DNS lookup that can take 35 s on macOS CI.

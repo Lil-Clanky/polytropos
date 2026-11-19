@@ -48,10 +48,13 @@ def test_fake_openai_http_error(fake_openai):
 
 
 def test_fake_openai_fail_after_drops_stream(fake_openai):
-    fake_openai.script("m1", {"content": "abcdef", "fail_after": 1})
-    with pytest.raises(Exception):
+    fake_openai.script("m1", {"content": "abcdef", "fail_after": 2})
+    seen = []
+    with pytest.raises(openai.APIConnectionError):
         stream = _client(fake_openai).chat.completions.create(model="m1", messages=[], stream=True)
-        list(stream)
+        for c in stream:
+            seen.append(c.choices[0].delta.content or "")
+    assert "".join(seen) == "ab"
 
 
 def test_sync_shared_check(tmp_path):

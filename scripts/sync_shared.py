@@ -26,6 +26,7 @@ def sync(root: Path) -> list[Path]:
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
+            os.chmod(tmp, 0o644)
             os.replace(tmp, dst)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)

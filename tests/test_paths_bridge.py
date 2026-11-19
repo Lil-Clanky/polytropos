@@ -50,6 +50,12 @@ def test_lookup_prefix_match():
     assert lookup_turn("other", now=1001.0) is None
 
 
+def test_empty_entry_matches_only_empty_lookup():
+    remember_turn(TurnInfo("s1", "cli", "", 1000.0))
+    assert lookup_turn("hello", now=1001.0) is None
+    assert lookup_turn("", now=1001.0).session_id == "s1"
+
+
 def test_lookup_returns_newest():
     remember_turn(TurnInfo("old", "cli", "hello", 1000.0))
     remember_turn(TurnInfo("new", "cli", "hello", 1001.0))
