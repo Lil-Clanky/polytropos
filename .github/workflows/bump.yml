@@ -1,0 +1,78 @@
+name: bump
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      components: ${{ steps.check.outputs.components }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - id: check
+        run: |
+          echo "components=$(python scripts/check_updates.py | python -c 'import json,sys; print(json.dumps([u["component"] for u in json.load(sys.stdin)]))')" >> "$GITHUB_OUTPUT"
+  bump:
+    needs: check
+    if: needs.check.outputs.components != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: ${{ fromJSON(needs.check.outputs.components) }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install "openai>=2" pytest pyyaml
+      - name: Update versions.lock
+        run: python scripts/check_updates.py --apply "${{ matrix.component }}" > update.json
+      - run: python -m pytest -q -m "not e2e"
+      - name: Build the new FreeLLMAPI tag and check /v1/models
+        if: matrix.component == 'freellmapi'
+        run: |
+          tag=$(python -c 'import json; print(json.load(open("update.json"))[0]["latest"])')
+          git clone --depth 1 --branch "$tag" https://github.com/tashfeenahmed/freellmapi.git "$RUNNER_TEMP/freellmapi"
+          cd "$RUNNER_TEMP/freellmapi"
+          npm ci
+          npm run build
+          export HOST=127.0.0.1 PORT=3001 NODE_ENV=production
+          export FREEAPI_ENV_PATH="$RUNNER_TEMP/freeapi.env"
+          mkdir -p server/data
+          printf 'ENCRYPTION_KEY=%s\n' "$(openssl rand -hex 32)" > "$FREEAPI_ENV_PATH"
+          node server/dist/index.js &
+          pid=$!
+          trap 'kill $pid' EXIT
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:3001/v1/models && exit 0; sleep 1; done
+          echo "GET /v1/models did not answer" >&2
+          exit 1
+      - name: Open or update the pull request
+        run: |
+          branch="bump/${{ matrix.component }}"
+          latest=$(python -c 'import json; print(json.load(open("update.json"))[0]["latest"])')
+          title="Bump ${{ matrix.component }} to $latest"
+          rm update.json
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -A
+          git commit -m "$title"
+          git push --force origin "$branch"
+          if [ -n "$(gh pr list --head "$branch" --json number --jq '.[].number')" ]; then
+            gh pr edit "$branch" --title "$title" --body "Weekly update check moved ${{ matrix.component }} to $latest. The tests passed."
+          else
+            gh pr create --head "$branch" --title "$title" --body "Weekly update check moved ${{ matrix.component }} to $latest. The tests passed."
+          fi

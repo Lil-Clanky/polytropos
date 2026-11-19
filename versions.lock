@@ -91,10 +91,12 @@ version = "4.7.3"
 # (git ls-remote --tags; lightweight tag, so the tag object is the commit).
 [plugins.ponytail]
 repo = "https://github.com/DietrichGebert/ponytail"
+tag = "v5.3.3"
 commit = "7801d061243d7b753bad0e0b3c057cd250b11755"
 
 # superpowers, license MIT. Tag v7.0.2 of https://github.com/obra/superpowers
 # (git ls-remote shows the peeled commit 22f0b463...).
 [plugins.superpowers]
 repo = "https://github.com/obra/superpowers"
+tag = "v7.0.2"
 commit = "22f0b463e7a5e579904dd6211a520321035526f7"
