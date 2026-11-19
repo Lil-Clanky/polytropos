@@ -60,6 +60,22 @@ def test_two_threads_share_one_hold():
     assert popen.procs[0].ended and holder.active == 0
 
 
+def test_first_acquires_race_to_one_process():
+    for _ in range(200):
+        popen = FakePopen()
+        holder = awake.AwakeHolder(platform="darwin", popen=popen)
+        barrier = threading.Barrier(2)
+
+        def run(key):
+            barrier.wait()
+            holder.acquire(key)
+
+        threads = [threading.Thread(target=run, args=(k,)) for k in ("a", "b")]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        assert len(popen.procs) == 1 and holder.active == 2
+
+
 def test_double_acquire_single_release_and_stray_release():
     popen = FakePopen()
     holder = awake.AwakeHolder(platform="darwin", popen=popen)
@@ -206,6 +222,13 @@ def test_switches(env, tmp_home, monkeypatch):
     assert turn(session="s2")["action"] == "block"
     config(tmp_home, "polytropos-router", ROUTER_URL)
     assert turn(session="s3") is None and len(env.procs) == 1
+
+
+def test_awake_off_takes_no_hold(env, tmp_home, monkeypatch):
+    config(tmp_home, "polytropos-router", ROUTER_URL)
+    monkeypatch.setattr(hooks, "_get_config", lambda key, default: key != "awake")
+    assert turn() is None
+    assert env.procs == [] and hooks._holder.active == 0
 
 
 def test_switches_default_on_before_configure(monkeypatch):
