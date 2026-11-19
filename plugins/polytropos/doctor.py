@@ -1,0 +1,300 @@
+"""The checks behind `hermes polytropos doctor`."""
+
+import fnmatch
+import importlib
+import json
+import os
+import platform as _platform
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from ._shared import canary, guard
+from .freellm import PORT, FreeLLM
+from .programs import installed_version, needs_install, programs
+from .services import ServiceManager
+from .state import load_state
+
+try:
+    from hermes_yaml import safe_load
+except ImportError:  # outside Hermes
+    from yaml import safe_load
+
+ADVICE_RAM = 16 * 1024**3  # the spec gives advice for 16 GB only
+ADVICE_PARAMS_B = 3.0
+ADVICE_WINDOW = 8192
+_SIZE_TAG = re.compile(r"(?<![a-z0-9])(\d+(?:\.\d+)?)b(?![a-z0-9])", re.IGNORECASE)
+_KEY_PATTERNS = ("*key*.json", "*keys*.json", "*.env.bak", ".env.backup*", "*.env.backup*")
+_SLEEP_LINE = re.compile(r"^\s*sleep\s+(\d+)", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    status: str  # ok | warn | fail | info
+    label: str
+    detail: str = ""
+    fix: str = ""
+
+
+@dataclass
+class DoctorContext:
+    hermes_home: Path
+    home: Path
+    platform: str
+    lock: dict
+    pack: dict
+    run: Callable
+    http_get: Callable  # (url, headers) -> (status, body); 0 refused, -1 not HTTP
+    hermes_version: str | None
+    tested_hermes: tuple[str, ...] = ("0.23.2",)
+
+
+def _router():
+    # shortcut: imports the router plugin by package name, Task 17 makes that name resolve in a real Hermes home once the spike shows how plugins load
+    return importlib.import_module("polytropos_router.config")
+
+
+def _router_config(ctx: DoctorContext):
+    return _router().load_config(ctx.hermes_home)
+
+
+def _version_tuple(text: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in re.findall(r"\d+", text))
+
+
+def check_hermes(ctx: DoctorContext) -> list[CheckResult]:
+    v = ctx.hermes_version
+    if not v:
+        return [CheckResult("fail", "Hermes was not found", fix="Install Hermes Agent, then run the doctor again")]
+    if v in ctx.tested_hermes:
+        return [CheckResult("ok", f"Hermes v{v} (tested)")]
+    newest = max(ctx.tested_hermes, key=_version_tuple)
+    kind = "newer than" if _version_tuple(v) > _version_tuple(newest) else "older than"
+    return [CheckResult("warn", f"Hermes v{v} is {kind} the tested versions ({', '.join(ctx.tested_hermes)})")]
+
+
+def _plugin_name(entry: dict) -> str:
+    return Path(entry.get("subdir") or str(entry["repo"]).removesuffix(".git")).name
+
+
+def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
+    path = ctx.hermes_home / "plugins" / ".install-metadata.json"
+    try:
+        metadata = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        metadata = {}
+    except (OSError, ValueError) as e:
+        return [CheckResult("fail", "plugin install metadata is unreadable", type(e).__name__)]
+    if not isinstance(metadata, dict):
+        return [CheckResult("fail", "plugin install metadata is unreadable", "expected a JSON object")]
+    results, good = [], []
+    for entry in ctx.pack.get("plugins", []):
+        name, pinned = _plugin_name(entry), str(entry["ref"]).lower()
+        record = metadata.get(name)
+        if not isinstance(record, dict):
+            results.append(CheckResult("fail", f"plugin {name} is not installed",
+                                       fix="hermes plugins pack install polytropos/hermes-pack.yaml"))
+            continue
+        revision = str(record.get("revision") or "").lower()
+        if revision != pinned:
+            results.append(CheckResult("warn", f"plugin {name} is at {revision[:7] or 'an unknown commit'}, "
+                                               f"the pack pins {pinned[:7]}"))
+        else:
+            good.append(name)
+    return ([CheckResult("ok", "plugins: " + ", ".join(good))] if good else []) + results
+
+
+def check_freellmapi(ctx: DoctorContext) -> list[CheckResult]:
+    services = ServiceManager(platform=ctx.platform, run=ctx.run, home=ctx.home)
+    found = FreeLLM(run=ctx.run, http_get=ctx.http_get, services=services).detect()
+    if not found.listening:
+        return [CheckResult("fail", f"FreeLLMAPI is not running on 127.0.0.1:{PORT}",
+                            fix="hermes polytropos install")]
+    if not found.is_freellmapi:
+        return [CheckResult("fail", f"port {PORT} is used by a program that is not FreeLLMAPI",
+                            "FreeLLMAPI cannot start while it is taken",
+                            f"Stop that program or free port {PORT}, then run hermes polytropos install")]
+    if not found.healthy:
+        return [CheckResult("warn", f"FreeLLMAPI answers on port {PORT} but /v1/models is not healthy",
+                            "it returned 401, check its provider keys")]
+    mode = load_state().shared.get("freellmapi", {}).get("mode") or "mode unknown"
+    return [CheckResult("ok", f"FreeLLMAPI {ctx.lock['freellmapi']['tag']}, {mode}, 127.0.0.1:{PORT}")]
+
+
+def check_router(ctx: DoctorContext) -> list[CheckResult]:
+    cfg, errors = _router_config(ctx)
+    results = [CheckResult("fail", "router config", e, "Fix the polytropos-router entry in config.yaml")
+               for e in errors]
+    floor = _router()
+    for slot in floor.cloud_slots_below_floor(cfg):
+        results.append(CheckResult("warn", f"cloud model {slot.upstream}/{slot.model} reports a window of "
+                                           f"{floor.window(cfg, slot):,} tokens",
+                                   f"Hermes refuses models below {floor.FLOOR:,} tokens"))
+    for up in cfg.upstreams.values():
+        status, _ = ctx.http_get(up.base_url.rstrip("/") + "/models", {})
+        if status <= 0:
+            results.append(CheckResult("warn", f"upstream {up.name} does not answer on {up.base_url}/models"))
+    return results or [CheckResult("ok", f"router config, {len(cfg.upstreams)} upstreams answer")]
+
+
+def check_old_router_section(ctx: DoctorContext) -> list[CheckResult]:
+    try:
+        data = safe_load((ctx.hermes_home / "config.yaml").read_text())
+    except Exception:  # a missing or unparsable file is the router check's business
+        return []
+    if isinstance(data, dict) and "router" in data:
+        return [CheckResult("info", "config.yaml has a top-level router: section",
+                            "Polytropos ignores it and reads plugins.entries.polytropos-router")]
+    return []
+
+
+def check_programs(ctx: DoctorContext) -> list[CheckResult]:
+    results, present = [], []
+    for p in programs(ctx.lock, platform=ctx.platform, machine=_platform.machine()):
+        if not needs_install(p, ctx.run):
+            present.append(p.name if p.name == "stack-canary" else f"{p.name} {p.version}")
+            continue
+        found = installed_version(p, ctx.run)
+        what = f"{p.name} is not installed" if found is None else f"{p.name} {found} differs from pinned {p.version}"
+        results.append(CheckResult("info" if p.optional and found is None else "warn", what,
+                                   fix="hermes polytropos install"))
+    return ([CheckResult("ok", ", ".join(present))] if present else []) + results
+
+
+def _local_slots(cfg):
+    seen = {}
+    for slots in cfg.routes.values():
+        for s in slots:
+            if cfg.upstreams[s.upstream].local:
+                seen[s] = cfg.upstreams[s.upstream]
+    return seen
+
+
+def check_canary(ctx: DoctorContext) -> list[CheckResult]:
+    cfg, _ = _router_config(ctx)
+    matrix, local = canary.load_matrix(), canary.load_local_results()
+    ollama = next(p for p in programs(ctx.lock, platform=ctx.platform, machine=_platform.machine())
+                  if p.name == "ollama")
+    version = installed_version(ollama, ctx.run)
+    results = []
+    for slot, up in _local_slots(cfg).items():
+        if up.runtime != "ollama" or version is None:
+            continue
+        verdict = matrix.verdict(version, slot.model)
+        if verdict == "fail":
+            good = matrix.passing_versions(slot.model)
+            hint = f"passes on Ollama {good[0]}" if good else "no tested Ollama version passes"
+            results.append(CheckResult("warn", f"Ollama {version} + {slot.model} fails the stack-canary tool checks; "
+                                               "the router skips it for tool turns", hint))
+        elif verdict == "unknown":
+            results.append(CheckResult("info", f"Ollama {version} + {slot.model} has no stack-canary verdict"))
+    for slots in cfg.routes.values():
+        for s in slots:
+            if local.get(f"{s.upstream}/{s.model}") == "fail":
+                results.append(CheckResult("warn", f"{s.upstream}/{s.model} failed the local tool checks; "
+                                                   "the router skips it for tool turns"))
+    return list(dict.fromkeys(results))
+
+
+def _params_b(model: str) -> float | None:
+    m = _SIZE_TAG.search(model)
+    return float(m.group(1)) if m else None
+
+
+def check_fit(ctx: DoctorContext) -> list[CheckResult]:
+    ram = guard.total_ram_bytes(platform=ctx.platform, run=ctx.run)
+    if ram is None:
+        return [CheckResult("info", "RAM could not be read")]
+    gb = ram / 1024**3
+    if ram > ADVICE_RAM:
+        return [CheckResult("info", f"{gb:.0f} GB RAM, no sizing advice for this amount")]
+    cfg, _ = _router_config(ctx)
+    results = []
+    for slot, up in _local_slots(cfg).items():
+        size = _params_b(slot.model)
+        if (size is not None and size > ADVICE_PARAMS_B) or up.context_window > ADVICE_WINDOW:
+            results.append(CheckResult(
+                "warn", f"{slot.upstream}/{slot.model} may be too large for {gb:.0f} GB RAM",
+                f"advice for 16 GB is a model of {ADVICE_PARAMS_B:g}B or smaller with a window of {ADVICE_WINDOW}"))
+    return results or [CheckResult("info", f"{gb:.0f} GB RAM, local models fit the advice")]
+
+
+def check_key_files(ctx: DoctorContext) -> list[CheckResult]:
+    results = []
+    for folder in (ctx.home / "Downloads", ctx.home / "Desktop", ctx.home):
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            continue
+        found = sorted(
+            f"{e.name} ({e.stat().st_mode & 0o777:04o})" for e in entries
+            if e.is_file() and any(fnmatch.fnmatch(e.name.lower(), pat) for pat in _KEY_PATTERNS))
+        if found:
+            shown = "~" if folder == ctx.home else f"~/{folder.name}"
+            results.append(CheckResult("warn", f"{len(found)} files in {shown} look like key exports "
+                                               "(file names checked, contents not opened)", ", ".join(found)))
+    return results or [CheckResult("ok", "no files that look like key exports (file names checked)")]
+
+
+def _hermes_root(ctx: DoctorContext) -> Path:
+    home = ctx.hermes_home
+    return home.parent.parent if home.parent.name == "profiles" else home
+
+
+def check_profiles(ctx: DoctorContext) -> list[CheckResult]:
+    try:
+        profiles = sorted(p for p in (_hermes_root(ctx) / "profiles").iterdir() if p.is_dir())
+    except OSError:
+        return []
+    return [CheckResult("info", f"profile {p.name}: Polytropos is "
+                                f"{'installed' if (p / 'plugins' / 'polytropos').is_dir() else 'not installed'}")
+            for p in profiles]
+
+
+def check_ponytail(ctx: DoctorContext) -> list[CheckResult]:
+    if not (ctx.hermes_home / "plugins" / "ponytail").is_dir():
+        return []
+    return [CheckResult("info", "ponytail adds text to every turn, which costs tokens in gateway chats",
+                        "To turn it off for the gateway, set PONYTAIL_DEFAULT_MODE=off in the gateway environment")]
+
+
+def check_superpowers(ctx: DoctorContext) -> list[CheckResult]:
+    if not (ctx.hermes_home / "plugins" / "superpowers").is_dir():
+        return []
+    return [CheckResult("info", "superpowers: its bootstrap after compaction is not verified on this Hermes version")]
+
+
+def check_sleep(ctx: DoctorContext) -> list[CheckResult]:
+    if ctx.platform != "darwin" or not list((ctx.home / "Library" / "LaunchAgents").glob("ai.hermes.gateway*.plist")):
+        return []
+    out = ctx.run(["pmset", "-g"], capture_output=True, text=True, check=False).stdout or ""
+    m = _SLEEP_LINE.search(out)
+    if m and int(m.group(1)) > 0:
+        return [CheckResult("warn", f"the Mac sleeps after {m.group(1)} minutes, which stops the gateway from "
+                                    "receiving messages", fix="sudo pmset -a sleep 0 (run it yourself)")]
+    return [CheckResult("ok", "the Mac does not sleep while the gateway runs")]
+
+
+CHECKS = (check_hermes, check_plugins, check_freellmapi, check_router, check_old_router_section, check_programs,
+          check_canary, check_fit, check_key_files, check_profiles, check_ponytail, check_superpowers, check_sleep)
+
+
+def run_checks(ctx: DoctorContext) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    for check in CHECKS:
+        try:
+            results += check(ctx)
+        except Exception as e:  # one broken check must not hide the others
+            results.append(CheckResult("fail", f"check {check.__name__.removeprefix('check_')} failed",
+                                       f"{type(e).__name__}: {e}"))
+    return results
+
+
+def format_report(results: list[CheckResult]) -> str:
+    lines = ["Polytropos doctor"]
+    for r in results:
+        lines.append(f"  {r.status:<6}{r.label}" + (f": {r.detail}" if r.detail else ""))
+        if r.fix:
+            lines.append(f"        {r.fix}")
+    return "\n".join(lines)

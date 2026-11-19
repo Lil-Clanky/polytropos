@@ -1,0 +1,290 @@
+import builtins
+import json
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from polytropos import doctor as d
+from polytropos._shared import canary as shared_canary
+from polytropos.programs import load_lock
+from polytropos.state import State, save_state, set_mode
+
+LOCK = load_lock(Path(__file__).resolve().parent.parent / "versions.lock")
+SHA, SHA2 = "a" * 40, "b" * 40
+GB = 1024**3
+PACK = {"plugins": [
+    {"repo": "Lil-Clanky/polytropos", "ref": SHA, "subdir": "plugins/polytropos"},
+    {"repo": "Lil-Clanky/polytropos", "ref": SHA, "subdir": "plugins/polytropos-router"},
+]}
+
+
+class FakeRun:
+    def __init__(self, ram=16 * GB, sleep=None, versions=None):
+        self.ram, self.sleep, self.versions, self.calls = ram, sleep, versions or {}, []
+
+    def __call__(self, argv, **kw):
+        argv = list(argv)
+        self.calls.append(argv)
+        out = ""
+        if argv[1:] == ["-n", "hw.memsize"]:
+            out = f"{self.ram}\n"
+        elif argv[:2] == ["pmset", "-g"]:
+            out = f" sleep                {self.sleep}\n displaysleep 10\n"
+        elif argv[1:] == ["--version"] and argv[0] in self.versions:
+            out = f"{argv[0]} {self.versions[argv[0]]}\n"
+        elif argv[0] == "launchctl":
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        elif argv[1:] == ["--version"]:
+            raise FileNotFoundError(argv[0])
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+
+def api(status=200):
+    return lambda url, headers: (status, b'{"data": []}')
+
+
+@pytest.fixture
+def ctx(tmp_home):
+    home = tmp_home / ".hermes"
+    (home / "plugins").mkdir(parents=True)
+    return d.DoctorContext(hermes_home=home, home=tmp_home, platform="darwin", lock=LOCK, pack=PACK,
+                           run=FakeRun(), http_get=api(), hermes_version="0.23.2")
+
+
+def write_config(ctx, text):
+    (ctx.hermes_home / "config.yaml").write_text(text)
+
+
+def only(results):
+    assert len(results) == 1, results
+    return results[0]
+
+
+def test_hermes_tested_newer_missing(ctx):
+    assert d.check_hermes(ctx)[0].status == "ok"
+    ctx.hermes_version = "0.24.0"
+    r = only(d.check_hermes(ctx))
+    assert r.status == "warn" and "newer" in r.label
+    ctx.hermes_version = None
+    assert only(d.check_hermes(ctx)).status == "fail"
+
+
+def test_plugins_compare_commits_with_the_pack(ctx):
+    meta = {"polytropos": {"source": "https://github.com/Lil-Clanky/polytropos#plugins/polytropos", "revision": SHA},
+            "polytropos-router": {"revision": SHA2}}
+    (ctx.hermes_home / "plugins" / ".install-metadata.json").write_text(json.dumps(meta))
+    ok, warn = d.check_plugins(ctx)
+    assert ok.status == "ok" and "polytropos" in ok.label
+    assert warn.status == "warn" and "polytropos-router" in warn.label and "bbbbbbb" in warn.label
+    (ctx.hermes_home / "plugins" / ".install-metadata.json").write_text("{}")
+    assert [r.status for r in d.check_plugins(ctx)] == ["fail", "fail"]
+
+
+def test_freellmapi_not_running(ctx):
+    ctx.http_get = lambda url, headers: (0, b"")
+    r = only(d.check_freellmapi(ctx))
+    assert r.status == "fail" and "not running" in r.label and r.fix == "hermes polytropos install"
+
+
+def test_freellmapi_port_taken_by_another_program(ctx):
+    ctx.http_get = lambda url, headers: (200, b"<html>hello</html>")
+    r = only(d.check_freellmapi(ctx))
+    assert r.status == "fail" and "3001" in r.label and "not FreeLLMAPI" in r.label
+
+
+def test_freellmapi_unhealthy_and_ok_with_mode(ctx):
+    ctx.http_get = api(401)
+    assert only(d.check_freellmapi(ctx)).status == "warn"
+    ctx.http_get = api(200)
+    state = State()
+    set_mode(state, "freellmapi", "external")
+    save_state(state)
+    r = only(d.check_freellmapi(ctx))
+    assert r.status == "ok" and r.label == f"FreeLLMAPI {LOCK['freellmapi']['tag']}, external, 127.0.0.1:3001"
+
+
+ROUTER = """
+plugins:
+  entries:
+    polytropos-router:
+      upstreams:
+        cloud: {base_url: "http://127.0.0.1:3001/v1", context_window: 32000}
+        ollama: {base_url: "http://127.0.0.1:11434/v1", local: true, runtime: ollama, context_window: 16384}
+      routes:
+        simple: [ollama/qwen3.5:0.8b, cloud/auto]
+        complex: [cloud/auto]
+"""
+
+
+def test_router_ok_with_defaults(ctx):
+    assert only(d.check_router(ctx)).status == "ok"
+
+
+def test_router_broken_config_shows_the_errors(ctx):
+    write_config(ctx, "plugins:\n  entries:\n    polytropos-router:\n      default_route: nowhere\n")
+    r = d.check_router(ctx)[0]
+    assert r.status == "fail" and "no route named" in r.detail
+
+
+def test_router_window_and_unanswered_upstream(ctx):
+    write_config(ctx, ROUTER)
+    ctx.http_get = lambda url, headers: (0, b"") if "11434" in url else (200, b"{}")
+    got = d.check_router(ctx)
+    assert [r.status for r in got] == ["warn", "warn"]
+    assert "cloud/auto" in got[0].label and "32,000" in got[0].label
+    assert "ollama" in got[1].label
+
+
+def test_old_router_section(ctx):
+    assert d.check_old_router_section(ctx) == []
+    write_config(ctx, "router:\n  mode: x\n")
+    r = only(d.check_old_router_section(ctx))
+    assert r.status == "info" and "ignores" in r.detail
+
+
+def test_programs(ctx):
+    ctx.run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": "0.0.1"})
+    got = d.check_programs(ctx)
+    assert got[0].status == "ok" and f"rtk {LOCK['rtk']['version']}" in got[0].label
+    by = {r.label.split()[0]: r for r in got[1:]}
+    assert by["graphify"].status == "warn" and "0.0.1" in by["graphify"].label
+    assert by["ast-grep"].status == "warn" and by["opencode"].status == "info"
+
+
+def fake_matrix(monkeypatch, cells):
+    matrix = shared_canary.Matrix(shared_canary.Cell(*c) for c in cells)
+    monkeypatch.setattr(d.canary, "load_matrix", lambda: matrix)
+
+
+def test_canary_failing_local_model(ctx, monkeypatch):
+    write_config(ctx, ROUTER)
+    ctx.run = FakeRun(versions={"ollama": "0.40.16"})
+    cells = [("0.40.16", "qwen3.5:0.8b", "A6", "fail"), ("0.40.14", "qwen3.5:0.8b", "A1", "pass")]
+    cells += [("0.40.14", "qwen3.5:0.8b", c, "pass") for c in ("A2", "A3", "A4", "A5", "A6")]
+    fake_matrix(monkeypatch, cells)
+    r = only(d.check_canary(ctx))
+    assert r.status == "warn" and "0.40.16" in r.label and "qwen3.5:0.8b" in r.label
+    assert "0.40.14" in r.detail
+
+
+def test_canary_local_result_fail_for_a_routed_slot(ctx, monkeypatch):
+    fake_matrix(monkeypatch, [])
+    shared_canary.save_local_results({"freellmapi/auto": "fail"})
+    r = only(d.check_canary(ctx))
+    assert r.status == "warn" and "freellmapi/auto" in r.label
+
+
+@pytest.mark.parametrize("ram, model, window, status", [
+    (16 * GB, "qwen3.5:0.8b", 8192, "info"),
+    (16 * GB, "llama3:8b", 8192, "warn"),
+    (16 * GB, "qwen3.5:0.8b", 32768, "warn"),
+    (16 * GB, "mystery", 8192, "info"),
+    (32 * GB, "llama3:70b", 131072, "info"),
+])
+def test_fit(ctx, ram, model, window, status):
+    write_config(ctx, f"""
+plugins:
+  entries:
+    polytropos-router:
+      upstreams:
+        ollama: {{base_url: "http://127.0.0.1:11434/v1", local: true, runtime: ollama, context_window: {window}}}
+      routes: {{simple: ["ollama/{model}"], complex: ["ollama/{model}"]}}
+""")
+    ctx.run = FakeRun(ram=ram)
+    r = only(d.check_fit(ctx))
+    assert r.status == status
+    if status == "info" and ram > 16 * GB:
+        assert "32 GB" in r.label
+
+
+def test_key_files_report_names_and_modes_without_opening(ctx, monkeypatch):
+    (ctx.home / "Downloads").mkdir()
+    bad = ctx.home / "Downloads" / "my-keys.json"
+    bad.write_text("secret")
+    os.chmod(bad, 0o644)
+    (ctx.home / ".env.backup2").write_text("secret")
+    (ctx.home / "Downloads" / "notes.txt").write_text("fine")
+    real_open, real_read = builtins.open, Path.read_text
+    guarded = lambda p: "keys.json" in str(p) or ".env.backup" in str(p)  # noqa: E731
+
+    def no_open(file, *a, **kw):
+        assert not guarded(file), file
+        return real_open(file, *a, **kw)
+
+    def no_read(self, *a, **kw):
+        assert not guarded(self), self
+        return real_read(self, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", no_open)
+    monkeypatch.setattr(Path, "read_text", no_read)
+    got = d.check_key_files(ctx)
+    assert [r.status for r in got] == ["warn", "warn"]
+    assert "my-keys.json (0644)" in got[0].detail and "contents not opened" in got[0].label
+    assert ".env.backup2" in got[1].detail and "secret" not in got[0].detail
+
+
+def test_key_files_none(ctx):
+    assert only(d.check_key_files(ctx)).status == "ok"
+
+
+def test_profiles(ctx):
+    root = ctx.hermes_home
+    (root / "profiles" / "work" / "plugins" / "polytropos").mkdir(parents=True)
+    (root / "profiles" / "play").mkdir(parents=True)
+    got = d.check_profiles(ctx)
+    assert [(r.status, r.label) for r in got] == [("info", "profile play: Polytropos is not installed"),
+                                                  ("info", "profile work: Polytropos is installed")]
+    ctx.hermes_home = root / "profiles" / "work"
+    assert len(d.check_profiles(ctx)) == 2
+
+
+def test_ponytail_and_superpowers_only_when_installed(ctx):
+    assert d.check_ponytail(ctx) == [] and d.check_superpowers(ctx) == []
+    (ctx.hermes_home / "plugins" / "ponytail").mkdir()
+    (ctx.hermes_home / "plugins" / "superpowers").mkdir()
+    assert "PONYTAIL_DEFAULT_MODE=off" in only(d.check_ponytail(ctx)).detail
+    assert "not verified" in only(d.check_superpowers(ctx)).label
+
+
+def test_sleep(ctx):
+    assert d.check_sleep(ctx) == []  # no gateway LaunchAgent
+    agents = ctx.home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    (agents / "ai.hermes.gateway.plist").write_text("")
+    ctx.run = FakeRun(sleep=1)
+    r = only(d.check_sleep(ctx))
+    assert r.status == "warn" and "sudo pmset -a sleep 0" in r.fix
+    ctx.run = FakeRun(sleep=0)
+    assert only(d.check_sleep(ctx)).status == "ok"
+    ctx.platform = "linux"
+    assert d.check_sleep(ctx) == []
+
+
+def test_a_raising_check_becomes_one_fail(ctx, monkeypatch):
+    def boom(ctx):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(d, "CHECKS", (d.check_hermes, boom))
+    got = d.run_checks(ctx)
+    assert [r.status for r in got] == ["ok", "fail"]
+    assert "boom" in got[1].label and "kaboom" in got[1].detail
+
+
+def test_run_checks_runs_every_check(ctx, monkeypatch):
+    fake_matrix(monkeypatch, [])
+    assert not any(r.status == "fail" and r.label.startswith("check ") for r in d.run_checks(ctx))
+
+
+def test_format_report_layout():
+    out = d.format_report([
+        d.CheckResult("ok", "Hermes v0.23.2 (tested)"),
+        d.CheckResult("warn", "2 files", "a, b", "do this"),
+        d.CheckResult("info", "RAM"),
+    ])
+    assert out == ("Polytropos doctor\n"
+                   "  ok    Hermes v0.23.2 (tested)\n"
+                   "  warn  2 files: a, b\n"
+                   "        do this\n"
+                   "  info  RAM")
