@@ -60,9 +60,15 @@ def test_two_threads_share_one_hold():
     assert popen.procs[0].ended and holder.active == 0
 
 
+class SlowPopen(FakePopen):
+    def __call__(self, argv, **kw):
+        time.sleep(0.001)  # widens the check-then-start window so a missing lock shows
+        return super().__call__(argv, **kw)
+
+
 def test_first_acquires_race_to_one_process():
-    for _ in range(200):
-        popen = FakePopen()
+    for _ in range(50):
+        popen = SlowPopen()
         holder = awake.AwakeHolder(platform="darwin", popen=popen)
         barrier = threading.Barrier(2)
 
