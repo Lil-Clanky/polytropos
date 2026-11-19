@@ -1,3 +1,4 @@
+import http.client
 import json
 import time
 from pathlib import Path
@@ -81,6 +82,18 @@ def test_no_cache_no_network_is_empty(tmp_path):
 
     matrix = canary.load_matrix(cache_path=tmp_path / "none.json", fetch=fail, now=time.time())
     assert matrix.verdict("0.40.16", "llama3.2:3b") == "unknown"
+
+
+def test_truncated_download_falls_back(tmp_path):
+    def truncated(url):
+        raise http.client.IncompleteRead(b"")
+
+    cache = tmp_path / "m.json"
+    cache.write_text(FIXTURE.read_text())
+    stale = cache.stat().st_mtime + 10**6
+    assert canary.load_matrix(cache_path=cache, fetch=truncated, now=stale).verdict("0.40.16", "llama3.2:3b") == "pass"
+    empty = canary.load_matrix(cache_path=tmp_path / "none.json", fetch=truncated, now=time.time())
+    assert empty.verdict("0.40.16", "llama3.2:3b") == "unknown"
 
 
 def test_bad_fetch_does_not_overwrite_cache(tmp_path):

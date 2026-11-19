@@ -1,5 +1,6 @@
 """Canary verdicts: which model and runtime combinations passed the tool-call checks."""
 
+import http.client
 import json
 import os
 import tempfile
@@ -82,7 +83,7 @@ def load_matrix(*, cache_path: Path | None = None, fetch: Callable[[str], bytes]
         matrix = parse_matrix(json.loads(raw))
         _write_atomic(cache_path, raw.decode())
         return matrix
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):  # e.g. a truncated download
         return cached or Matrix([])
 
 
