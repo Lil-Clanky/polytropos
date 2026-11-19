@@ -37,10 +37,9 @@ class DecisionCache:
             return len(self._data)
 
     def key_for(self, messages: list) -> str | None:
-        found = last_user(messages)
-        if found is None:
-            return None
-        return hashlib.sha256(f"{found[0]}:{found[1]}".encode()).hexdigest()
+        # every user message up to the last one, so two chats that end alike do not share a decision
+        pairs = [f"{i}:{message_text(m.get('content'))}" for i, m in enumerate(messages) if m.get("role") == "user"]
+        return hashlib.sha256("\0".join(pairs).encode()).hexdigest() if pairs else None
 
     def get(self, key: str) -> Decision | None:
         with self._lock:

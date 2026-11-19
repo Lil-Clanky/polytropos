@@ -1,4 +1,6 @@
 import json
+import threading
+from types import SimpleNamespace as NS
 
 import openai
 import pytest
@@ -102,3 +104,86 @@ def test_stream_error_before_output_retries(fake_openai):
     gs = GuardedStream(first(), tools=TOOLS, retry=second)
     text, _ = collect(gs)
     assert text == "recovered" and gs.retried
+
+
+def fake_chunk(content=None, role=None, **extra):
+    return NS(choices=[NS(delta=NS(content=content, role=role, tool_calls=None, **extra), finish_reason=None)])
+
+
+class Failing:
+    def __init__(self, chunks, error=RuntimeError("dropped")):
+        self.chunks, self.error = chunks, error
+
+    def __iter__(self):
+        yield from self.chunks
+        raise self.error
+
+
+class Blocking:
+    """Blocks until closed, then fails like a broken connection."""
+
+    def __init__(self):
+        self.started, self.closed = threading.Event(), threading.Event()
+
+    def __iter__(self):
+        self.started.set()
+        self.closed.wait(5)
+        raise RuntimeError("closed")
+
+    def close(self):
+        self.closed.set()
+
+
+def test_role_only_then_error_retries_with_one_role_delta():
+    gs = GuardedStream(Failing([fake_chunk(role="assistant", content="")]), tools=TOOLS,
+                       retry=lambda: [fake_chunk(role="assistant", content=""), fake_chunk("ok")])
+    chunks = list(gs)
+    assert gs.retried and [c.choices[0].delta.role for c in chunks] == ["assistant", None]
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning", "reasoning_details"])
+def test_error_after_reasoning_reraises(field):
+    chunks = [fake_chunk(role="assistant", content=""), fake_chunk(**{field: "Plan A"})]
+    gs = GuardedStream(Failing(chunks), tools=TOOLS, retry=lambda: pytest.fail("retried"))
+    seen = []
+    with pytest.raises(RuntimeError):
+        for c in gs:
+            seen.append(c)
+    assert len(seen) == 2
+
+
+def test_close_before_text_does_not_retry():
+    up, order = Blocking(), []
+    gs = GuardedStream(up, tools=TOOLS, retry=lambda: order.append("retry") or [], on_close=lambda: order.append("on_close"))
+    errors = []
+
+    def consume():
+        try:
+            list(gs)
+        except RuntimeError as e:
+            errors.append(e)
+
+    t = threading.Thread(target=consume)
+    t.start()
+    assert up.started.wait(2)
+    gs.close()
+    t.join(2)
+    assert not t.is_alive() and order == ["on_close"] and errors
+
+
+def test_close_during_retry_closes_retry_stream():
+    second = Blocking()
+    gs = GuardedStream(Failing([]), tools=TOOLS, retry=lambda: second)
+    t = threading.Thread(target=_drain, args=(gs,))
+    t.start()
+    assert second.started.wait(2)
+    gs.close()
+    t.join(2)
+    assert not t.is_alive() and second.closed.is_set()
+
+
+def _drain(gs):
+    try:
+        list(gs)
+    except RuntimeError:
+        pass

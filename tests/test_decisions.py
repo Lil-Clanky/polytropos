@@ -46,6 +46,15 @@ def test_key_changes_on_next_user_message():
     assert c.key_for([SYS]) is None
 
 
+def test_key_covers_user_history():
+    c = DecisionCache()
+    other = [SYS, {"role": "user", "content": "different"},
+             {"role": "assistant", "content": "a"}, {"role": "user", "content": "hello"}]
+    same_last = [SYS, USER, {"role": "assistant", "content": "a"}, {"role": "user", "content": "hello"}]
+    assert c.key_for(other) != c.key_for(same_last)
+    assert c.key_for(same_last) == c.key_for(same_last + [{"role": "assistant", "content": None}, {"role": "tool", "content": "r"}])
+
+
 def test_key_handles_multimodal():
     msg = {"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "image_url", "image_url": {}}]}
     assert DecisionCache().key_for([SYS, msg]) is not None

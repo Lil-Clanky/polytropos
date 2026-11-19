@@ -81,10 +81,24 @@ def _typed(value, kind: type, path: str):
     return value
 
 
+def _classifier(raw, upstreams: dict) -> tuple[Slot | None, int, float]:
+    if raw is None:
+        default = DEFAULT_CONFIG.classifier
+        usable = default if default.upstream in upstreams else None
+        return usable, 16, 8.0
+    if isinstance(raw, dict):
+        slot = _slot(_typed(raw.get("model"), str, "classifier.model"), "classifier.model", upstreams)
+        return (slot,
+                _typed(raw.get("max_tokens", 16), int, "classifier.max_tokens"),
+                float(_typed(raw.get("timeout_s", 8.0), float, "classifier.timeout_s")))
+    return _slot(_typed(raw, str, "classifier"), "classifier", upstreams), 16, 8.0
+
+
 def parse_config(raw: dict) -> RouterConfig:
     raw = _mapping(raw, "config")
-    upstreams = {}
-    for name, body in _mapping(raw.get("upstreams"), "upstreams").items():
+    raw_upstreams = raw.get("upstreams")
+    upstreams = dict(DEFAULT_CONFIG.upstreams) if raw_upstreams is None else {}
+    for name, body in ({} if raw_upstreams is None else _mapping(raw_upstreams, "upstreams")).items():
         path = f"upstreams.{name}"
         body = _mapping(body, path)
         if not body.get("base_url"):
@@ -97,25 +111,26 @@ def parse_config(raw: dict) -> RouterConfig:
             _typed(body.get("local", False), bool, f"{path}.local"),
             str(body.get("runtime", "")), window,
         )
-    routes = {}
-    for tier, slots in _mapping(raw.get("routes"), "routes").items():
+    raw_routes = raw.get("routes")
+    routes = dict(DEFAULT_CONFIG.routes) if raw_routes is None else {}
+    for tier, slots in ({} if raw_routes is None else _mapping(raw_routes, "routes")).items():
         if not isinstance(slots, list) or not slots:
             raise ConfigError(f"routes.{tier}: expected a non-empty list")
         routes[tier] = tuple(_slot(s, f"routes.{tier}[{i}]", upstreams) for i, s in enumerate(slots))
-    default_route = raw.get("default_route", "complex")
+    default_route = _typed(raw.get("default_route", "complex"), str, "default_route")
     if default_route not in routes:
         raise ConfigError(f"default_route: no route named {default_route!r}")
-    hints = _mapping(raw.get("channel_hints", {}), "channel_hints")
+    hints = _mapping(raw.get("channel_hints") or {}, "channel_hints")
     for platform, tier in hints.items():
-        if tier not in routes:
+        if _typed(tier, str, f"channel_hints.{platform}") not in routes:
             raise ConfigError(f"channel_hints.{platform}: no route named {tier!r}")
-    classifier = raw.get("classifier")
+    classifier, max_tokens, timeout_s = _classifier(raw.get("classifier"), upstreams)
     return RouterConfig(
         upstreams=upstreams,
         routes=routes,
-        classifier=_slot(classifier, "classifier", upstreams) if classifier else None,
-        classifier_max_tokens=_typed(raw.get("classifier_max_tokens", 16), int, "classifier_max_tokens"),
-        classifier_timeout_s=float(_typed(raw.get("classifier_timeout_s", 8.0), float, "classifier_timeout_s")),
+        classifier=classifier,
+        classifier_max_tokens=max_tokens,
+        classifier_timeout_s=timeout_s,
         default_route=default_route,
         channel_hints=dict(hints),
         save_traces=_typed(raw.get("save_traces", False), bool, "save_traces"),
@@ -131,9 +146,12 @@ def load_config(hermes_home: Path) -> tuple[RouterConfig, list[str]]:
     except (OSError, KeyError, TypeError):
         return DEFAULT_CONFIG, []
     except Exception as e:  # unparsable YAML must not stop Hermes
-        return DEFAULT_CONFIG, [f"config.yaml: {e}"]
+        # Never format the exception: its message quotes the offending line, which may hold a secret.
+        mark = getattr(e, "problem_mark", None)
+        where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+        return DEFAULT_CONFIG, [f"config.yaml: {getattr(e, 'problem', None) or type(e).__name__}{where}"]
     try:
-        return parse_config(section), []
+        return parse_config(section or {}), []
     except ConfigError as e:
         return DEFAULT_CONFIG, [str(e)]
 

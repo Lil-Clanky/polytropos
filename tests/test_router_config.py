@@ -1,4 +1,5 @@
 import pytest
+import yaml
 
 from polytropos_router.config import (
     DEFAULT_CONFIG, ConfigError, Slot, cloud_slots_below_floor, load_config,
@@ -97,3 +98,62 @@ def test_estimate_tokens_list_content():
                                               {"type": "image_url", "image_url": {"url": "x"}}]}]
     assert estimate_tokens(messages) > 0
     assert estimate_tokens(messages, [{"type": "function"}]) > estimate_tokens(messages)
+
+
+SPEC_YAML = """
+upstreams:
+  freellmapi: {base_url: "http://127.0.0.1:3001/v1", api_key_env: FREELLMAPI_API_KEY}
+  ollama: {base_url: "http://127.0.0.1:11434/v1", local: true, runtime: ollama, context_window: 8192}
+default_route: complex
+classifier:
+  model: freellmapi/auto
+  max_tokens: 16
+routes:
+  simple: [ollama/llama3.2:3b, freellmapi/auto]
+  complex: [freellmapi/auto]
+channel_hints:
+  whatsapp: simple
+save_traces: false
+"""
+
+
+def test_spec_yaml_verbatim():
+    cfg = parse_config(yaml.safe_load(SPEC_YAML))
+    assert cfg.classifier == Slot("freellmapi", "auto") and cfg.classifier_max_tokens == 16
+    assert cfg.upstreams["ollama"].context_window == 8192 and cfg.channel_hints == {"whatsapp": "simple"}
+
+
+def test_classifier_mapping_options_and_bad_shapes():
+    cfg = parse_config({**SPEC, "classifier": {"model": "freellmapi/auto", "max_tokens": 8, "timeout_s": 2}})
+    assert (cfg.classifier_max_tokens, cfg.classifier_timeout_s) == (8, 2.0)
+    with pytest.raises(ConfigError, match="classifier") as e:
+        parse_config({**SPEC, "classifier": ["secret-value"]})
+    assert "secret-value" not in str(e.value)
+
+
+@pytest.mark.parametrize("section", [
+    {"default_route": "complex"}, {"channel_hints": {"whatsapp": "simple"}}, {"save_traces": True}, {},
+])
+def test_partial_sections_fill_from_defaults(tmp_path, section):
+    _write(tmp_path, yaml.safe_dump({"plugins": {"entries": {"polytropos-router": section}}}))
+    cfg, errors = load_config(tmp_path)
+    assert errors == [] and cfg.routes == DEFAULT_CONFIG.routes and cfg.classifier == DEFAULT_CONFIG.classifier
+
+
+def test_empty_section_is_defaults(tmp_path):
+    _write(tmp_path, "plugins:\n  entries:\n    polytropos-router:\n")
+    assert load_config(tmp_path) == (DEFAULT_CONFIG, [])
+
+
+@pytest.mark.parametrize("section", [{"default_route": ["complex"]}, {"channel_hints": {"whatsapp": ["simple"]}}])
+def test_unhashable_values_do_not_raise(tmp_path, section):
+    _write(tmp_path, yaml.safe_dump({"plugins": {"entries": {"polytropos-router": section}}}))
+    cfg, errors = load_config(tmp_path)
+    assert cfg == DEFAULT_CONFIG and len(errors) == 1
+
+
+def test_yaml_error_does_not_echo_secret(tmp_path):
+    _write(tmp_path, "a: 1\nb: 2\napi_key: sk-live-SECRET123: oops\n")
+    cfg, errors = load_config(tmp_path)
+    assert cfg == DEFAULT_CONFIG and len(errors) == 1
+    assert "SECRET123" not in errors[0] and "line 3" in errors[0]
