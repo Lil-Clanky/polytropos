@@ -102,7 +102,7 @@ def apply_update(lock_path: Path, pack_path: Path, update: dict[str, str], fetch
     """Write one update from find_updates into versions.lock (and the pack file for plugins)."""
     name, latest = update["component"], update["latest"]
     section, repo, key = COMPONENTS[name]
-    values = {key: latest}
+    values = {key: latest.removeprefix("v") if name == "rtk" else latest}  # rtk keeps its version without the tag's v
     if name in PACK_REPOS or name == "freellmapi":
         # the commits endpoint peels annotated tags
         sha = json.loads(fetch(f"{GITHUB}{repo}/commits/{latest}"))["sha"]
@@ -113,7 +113,7 @@ def apply_update(lock_path: Path, pack_path: Path, update: dict[str, str], fetch
     if name == "rtk":
         # Each asset keeps its target name; its url and sha256 follow the new release.
         sums = fetch(f"https://github.com/{repo}/releases/download/{latest}/checksums.txt").decode()
-        digests = {n: d for d, n in (l.split() for l in sums.splitlines() if l.strip())}
+        digests = {n.lstrip("*"): d for d, n in (l.split() for l in sums.splitlines() if l.strip())}
         for target, asset in tomllib.loads(lock_path.read_text())["rtk"]["assets"].items():
             file = asset["url"].rsplit("/", 1)[1]
             update_lock(lock_path, f"rtk.assets.{target}", {

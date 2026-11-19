@@ -161,3 +161,21 @@ def test_apply_freellmapi_cli_rewrites_only_cli_version(tmp_path):
     lock.write_text('[freellmapi]\ntag = "v1"\ncommit = "c"\ncli_version = "0.8.2"\n')
     cu.apply_update(lock, tmp_path / "none.yaml", {"component": "freellmapi-cli", "current": "0.8.2", "latest": "0.8.3"}, fake_fetch({}))
     assert lock.read_text() == '[freellmapi]\ntag = "v1"\ncommit = "c"\ncli_version = "0.8.3"\n'
+
+
+def test_apply_rtk_keeps_version_without_v_and_reads_checksums(tmp_path):
+    base = "https://github.com/rtk-ai/rtk/releases/download/"
+    lock = tmp_path / "versions.lock"
+    lock.write_text(
+        '[rtk]\nversion = "1.2.1"\nrepo = "https://github.com/rtk-ai/rtk"\n\n'
+        f'[rtk.assets.darwin-arm64]\nurl = "{base}v1.2.1/rtk-a.tar.gz"\nsha256 = "old1"\n\n'
+        f'[rtk.assets.linux-x86_64]\nurl = "{base}v1.2.1/rtk-b.tar.gz"\nsha256 = "old2"\n'
+    )
+    sums = f"{'1' * 64}  rtk-a.tar.gz\n{'2' * 64} *rtk-b.tar.gz\n"
+    fetch = lambda url: sums.encode() if url == f"{base}v1.2.2/checksums.txt" else (_ for _ in ()).throw(OSError(url))
+    cu.apply_update(lock, tmp_path / "none.yaml", {"component": "rtk", "current": "1.2.1", "latest": "v1.2.2"}, fetch)
+    import tomllib
+    data = tomllib.loads(lock.read_text())["rtk"]
+    assert data["version"] == "1.2.2"
+    assert data["assets"]["darwin-arm64"] == {"url": f"{base}v1.2.2/rtk-a.tar.gz", "sha256": "1" * 64}
+    assert data["assets"]["linux-x86_64"] == {"url": f"{base}v1.2.2/rtk-b.tar.gz", "sha256": "2" * 64}
