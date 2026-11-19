@@ -3,6 +3,7 @@
 import argparse
 import ipaddress
 import json
+import os
 import platform
 import re
 import shlex
@@ -240,7 +241,7 @@ def _own_freellmapi(state: State, profile: str, tag: str) -> None:
 
 
 def _added_by(command: list[str], home: Path) -> Path | str | None:
-    """What an integration command adds for this profile: a folder, or the config key of an MCP server."""
+    """What an integration command adds or changes: a folder or file, or the config key of an MCP server."""
     if command[:3] == ["hermes", "skills", "install"]:  # official/<category>/<name> goes to skills/<category>/<name>
         return home / "skills" / Path(*command[3].split("/")[1:])
     if command[:3] == ["hermes", "mcp", "add"]:
@@ -249,17 +250,23 @@ def _added_by(command: list[str], home: Path) -> Path | str | None:
         return home / "plugins" / "rtk"
     if command == ["graphify", "install", "--platform", "hermes"]:  # graphify ignores HERMES_HOME
         return Path.home() / ".hermes" / "skills" / "graphify"
+    if command[-1:] == ["setup-opencode"]:  # FreeLLMAPI's CLI merges its provider into OpenCode's config (tools.ts)
+        config_home = os.environ.get("XDG_CONFIG_HOME", "").strip() or Path.home() / ".config"
+        return Path(config_home) / "opencode" / "opencode.json"
     return None
 
 
-def _present(target: Path | str, home: Path) -> bool:
-    return target.exists() if isinstance(target, Path) else _get(_read_config(home), target) is not None
+def _snapshot(target: Path | str, home: Path):
+    """A config value, a file's modification time or whether a folder exists, to compare around an install."""
+    if isinstance(target, str):
+        return _get(_read_config(home), target)
+    return target.stat().st_mtime_ns if target.is_file() else target.exists()
 
 
-def _record_integrations(state: State, profile: str, added: list[tuple[list[str], Path | str]]) -> None:
-    for command, target in added:
+def _record_integrations(state: State, profile: str, changed: list[tuple[list[str], Path | str, object]]) -> None:
+    for command, target, old in changed:
         if isinstance(target, str):  # an MCP server entry, undone with the other config changes
-            record_config_change(state, profile, target, None, _get(_read_config(Path(profile)), target))
+            record_config_change(state, profile, target, old, _snapshot(target, Path(profile)))
             continue
         items = state.profiles.setdefault(profile, {}).setdefault("integrations", [])
         if {"ran": command, "added": str(target)} not in items:
@@ -269,9 +276,9 @@ def _record_integrations(state: State, profile: str, added: list[tuple[list[str]
 
 def _install_program(p: programs.Program, state: State, profile: str, fx: Effects) -> bool:
     home = Path(profile)
-    # Only what is missing now counts as added by this install, so uninstall leaves the user's own setup alone.
-    missing = [(command, target) for command in p.install_cmds
-               if (target := _added_by(command, home)) is not None and not _present(target, home)]
+    # Only what this install changes is recorded, so uninstall leaves the user's own setup alone.
+    touched = [(command, target, _snapshot(target, home)) for command in p.install_cmds
+               if (target := _added_by(command, home)) is not None]
     try:
         before = programs.installed_version(p, fx.run)
         if programs.needs_install(p, fx.run):
@@ -280,8 +287,8 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
     except (subprocess.CalledProcessError, OSError, ValueError) as err:
         print(f"{p.name} was not installed: {err}")
         return False
-    finally:  # also after a failed step, for what the earlier steps added
-        _record_integrations(state, profile, [(c, t) for c, t in missing if _present(t, home)])
+    finally:  # also after a failed step, for what the earlier steps changed
+        _record_integrations(state, profile, [(c, t, old) for c, t, old in touched if _snapshot(t, home) != old])
     use_shared(state, p.name, profile, version=p.version, installed_by_us=before is None)
     save_state(state)
     return True
@@ -504,6 +511,11 @@ def _remove_program(p: programs.Program, fx: Effects) -> None:
 def _undo_integration(item: dict, home: Path, fx: Effects) -> bool:
     """Undo one recorded integration of this profile. False keeps the record, so the next uninstall tries again."""
     ran, added = item["ran"], Path(item["added"])
+    if ran[-1:] == ["setup-opencode"]:  # no safe undo: it merged its entries into the user's own OpenCode config
+        print(f"FreeLLMAPI's setup-opencode added the freellmapi provider to {added} and set a freellmapi model as "
+              "OpenCode's default. If OpenCode should stop using FreeLLMAPI, remove that provider and change the "
+              "model there by hand.")
+        return True
     if ran[:3] == ["hermes", "skills", "install"]:
         command = ["hermes", "skills", "uninstall", added.name, "--yes"]
     elif ran[1:] == ["init", "--agent", "hermes"]:

@@ -1,6 +1,7 @@
 import argparse
 import importlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -477,6 +478,35 @@ def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(t
     assert graphify.is_dir() and f"added {graphify}, which is outside this profile" in out
     assert "Run this command yourself: hermes skills uninstall qmd --yes" in out
     assert load_state().profiles[str(home)] == {"integrations": [qmd]}
+
+
+def test_install_records_setup_opencode_when_it_changes_opencodes_config(tmp_home, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_home / "config"))
+    opencode_json = tmp_home / "config" / "opencode" / "opencode.json"
+    opencode_json.parent.mkdir(parents=True)
+    opencode_json.write_text('{"theme": "mine"}')  # the user's own OpenCode settings, there before the install
+    os.utime(opencode_json, (1, 1))
+    run = FakeRun(on={("npx",): lambda argv: opencode_json.write_text('{"theme": "mine", "provider": {}}')})
+    assert cli.handle(parse("install", "--only", "opencode"), cli.Effects(run=run, ask=no_questions)) == 0
+    setup = ["npx", "-y", f"freellmapi@{LOCK['freellmapi']['cli_version']}", "setup-opencode"]
+    assert load_state().profiles[str(tmp_home / ".hermes")] == {
+        "integrations": [{"ran": setup, "added": str(opencode_json)}]}
+
+
+def test_uninstall_prints_a_note_for_a_recorded_setup_opencode_and_runs_nothing(tmp_home, capsys):
+    home = tmp_home / ".hermes"
+    opencode_json = tmp_home / ".config" / "opencode" / "opencode.json"
+    state = State()
+    state.profiles[str(home)] = {"integrations": [
+        {"ran": ["npx", "-y", "freellmapi@1.0.0", "setup-opencode"], "added": str(opencode_json)}]}
+    save_state(state)
+    run = FakeRun()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands() == []
+    out = capsys.readouterr().out
+    assert f"setup-opencode added the freellmapi provider to {opencode_json}" in out
+    assert "remove that provider and change the model there by hand" in out
+    assert str(home) not in load_state().profiles
 
 
 # --- setup ---
