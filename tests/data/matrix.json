@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "generated": "2026-11-19T00:00:00Z",
+  "cells": [
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A6",
+      "status": "fail",
+      "passed": 0,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "qwen3.5:0.8b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.16",
+      "model": "llama3.2:3b",
+      "check": "A6",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A6",
+      "status": "fail",
+      "passed": 0,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "qwen3.5:0.8b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A1",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A2",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A3",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A4",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A5",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    },
+    {
+      "ollama": "0.40.15",
+      "model": "llama3.2:3b",
+      "check": "A6",
+      "status": "pass",
+      "passed": 3,
+      "attempts": 3
+    }
+  ]
+}
