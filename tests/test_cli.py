@@ -130,7 +130,34 @@ def test_doctor_prints_report_and_exits_1_on_a_failed_check(tmp_home, monkeypatc
     out = capsys.readouterr().out
     assert out.startswith("Polytropos doctor") and "broken part" in out
     monkeypatch.setattr(doctor, "CHECKS", (lambda ctx: [doctor.CheckResult("ok", "fine part")],))
+    (tmp_home / ".hermes").mkdir()
+    (tmp_home / ".hermes" / "config.yaml").write_text("model:\n  provider: polytropos-router\n")
     assert cli.handle(parse("doctor"), cli.Effects(run=FakeRun(), ask=no_questions)) == 0
+
+
+def test_doctor_offers_the_router_as_default_model_after_a_clean_run(tmp_home, monkeypatch, capsys):
+    home = tmp_home / ".hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text(yaml.safe_dump({
+        "model": {"provider": "custom", "default": "free-model", "base_url": "http://localhost:3001/v1"}}))
+    monkeypatch.setattr(doctor, "CHECKS", (lambda ctx: [doctor.CheckResult("warn", "a warning is no failure")],))
+    run, asked = FakeRun(), []
+    assert cli.handle(parse("doctor"), cli.Effects(run=run, ask=lambda q: asked.append(q) or "y")) == 0
+    assert asked == ["Make the Polytropos router the default model (provider polytropos-router, model auto)? [y/N] "]
+    assert run.commands() == [["hermes", "config", "set", "model.provider", "polytropos-router"],
+                              ["hermes", "config", "set", "model.default", "auto"]]
+    assert config_changes(load_state(), str(home)) == [
+        {"key": "model.base_url", "old": "http://localhost:3001/v1", "new": None},
+        {"key": "model.provider", "old": "custom", "new": "polytropos-router"},
+        {"key": "model.default", "old": "free-model", "new": "auto"}]
+
+    def no_terminal(question):
+        raise EOFError
+
+    run = FakeRun()
+    assert cli.handle(parse("doctor"), cli.Effects(run=run, ask=no_terminal)) == 0
+    assert run.commands() == []
+    assert "To make the Polytropos router the default model, run: hermes polytropos setup" in capsys.readouterr().out
 
 
 def test_doctor_checks_plugins_in_an_installed_home_without_a_pack_file(tmp_home, monkeypatch, capsys):

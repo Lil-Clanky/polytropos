@@ -36,6 +36,7 @@ RELEASE_API = "https://api.github.com/repos/Lil-Clanky/polytropos/releases/lates
 RAW = "https://raw.githubusercontent.com/Lil-Clanky/polytropos"
 OWN_REPO = "Lil-Clanky/polytropos"
 ROUTER_KEY = "plugins.entries.polytropos-router."
+ROUTER_DEFAULT = [("model.provider", "polytropos-router"), ("model.default", "auto")]
 PACK_PLUGINS = ("polytropos-router", "ponytail", "superpowers", "polytropos")
 _TAG = re.compile(r"[A-Za-z0-9._-]+")
 _HERE = Path(__file__).resolve()
@@ -79,8 +80,16 @@ def _answer(fx: Effects, prompt: str) -> str:
         return ""
 
 
-def _yes(fx: Effects, question: str) -> bool:
-    return _answer(fx, f"{question} [y/N] ").lower() in ("y", "yes")
+def _yes(fx: Effects, question: str) -> bool | None:
+    """True on y or yes. None when there is no terminal to ask, which callers may take as no."""
+    try:
+        return fx.ask(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return None
+
+
+def _ask_router_default(fx: Effects) -> bool | None:
+    return _yes(fx, "Make the Polytropos router the default model (provider polytropos-router, model auto)?")
 
 
 def _repo_file(name: str) -> Path | None:
@@ -159,7 +168,18 @@ def _doctor(args, fx: Effects) -> int:
                                fx.http_get, _hermes_version(fx))
     results = doctor.run_checks(ctx)
     print(doctor.format_report(results))
-    return 1 if any(r.status == "fail" for r in results) else 0
+    if any(r.status == "fail" for r in results):
+        return 1
+    if _get(_read_config(home), "model.provider") == "polytropos-router":
+        return 0
+    answer = _ask_router_default(fx)
+    if answer is None:
+        print("To make the Polytropos router the default model, run: hermes polytropos setup")
+    elif answer:
+        if not _write_config(home, load_state(), ROUTER_DEFAULT, fx):
+            return 1
+        print("The Polytropos router is now the default model.")
+    return 0
 
 
 # --- setup ---
@@ -182,8 +202,16 @@ def _setup(args, fx: Effects) -> int:
                (ROUTER_KEY + "routes.simple", ["freellmapi/auto"]),
                (ROUTER_KEY + "classifier", "freellmapi/auto"),
                (ROUTER_KEY + "upstreams.freellmapi", {"base_url": f"{url}/v1", "api_key_env": "FREELLMAPI_API_KEY"})]
-    if _yes(fx, "Make the Polytropos router the default model (provider polytropos-router, model auto)?"):
-        changes += [("model.provider", "polytropos-router"), ("model.default", "auto")]
+    if _ask_router_default(fx):
+        changes += ROUTER_DEFAULT
+    if not _write_config(home, state, changes, fx):
+        return 1
+    print("The router settings are written.")
+    return 0
+
+
+def _write_config(home: Path, state: State, changes: list[tuple[str, object]], fx: Effects) -> bool:
+    """Set each key through `hermes config set` and record its old value for uninstall. Stops at a failed key."""
     current, profile = _read_config(home), str(home)
     for key, new in changes:
         old = _get(current, key)
@@ -193,15 +221,14 @@ def _setup(args, fx: Effects) -> int:
         if fx.run(command, check=False).returncode != 0:
             print(f"Setting {key} failed. Run this command yourself, then run hermes polytropos setup again:")
             print(f"  {shlex.join(command)}")
-            return 1
+            return False
         if key == "model.provider":  # Hermes drops the old provider's route keys; recorded first, restored last
             for route_key in ("model.base_url", "model.api_mode"):
                 if _get(current, route_key) is not None:
                     record_config_change(state, profile, route_key, _get(current, route_key), None)
         record_config_change(state, profile, key, old, new)
         save_state(state)
-    print("The router settings are written.")
-    return 0
+    return True
 
 
 # --- install and adopt ---
