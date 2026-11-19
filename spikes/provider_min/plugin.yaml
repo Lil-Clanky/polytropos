@@ -1,0 +1,5 @@
+name: polytropos-spike
+kind: model-provider
+version: 0.0.1
+description: Spike provider that records how Hermes drives a provider-supplied client
+author: Lil-Clanky

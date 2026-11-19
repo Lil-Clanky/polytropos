@@ -1,0 +1,1 @@
+MARKER = "relative import ok"

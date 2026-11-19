@@ -1,0 +1,5 @@
+name: hook-probe
+version: 0.0.1
+description: Spike plugin that records the hooks Hermes fires around a turn
+author: Lil-Clanky
+provides_hooks: [pre_llm_call, pre_api_request, post_llm_call, on_session_end]
