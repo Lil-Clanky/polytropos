@@ -1,6 +1,7 @@
 """`hermes polytropos <command>`: doctor, setup, install, adopt, update, rollback, canary, status, uninstall."""
 
 import argparse
+import ipaddress
 import json
 import platform
 import re
@@ -13,10 +14,11 @@ import tomllib
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+from urllib.parse import urlparse
 
 from . import doctor, programs
-from ._shared import paths
+from ._shared import canary, paths
 from .freellm import PORT, FreeLLM, Pin, _default_get
 from .services import ServiceManager
 from .state import (State, config_changes, load_state, record_config_change, release_shared, save_state, set_mode,
@@ -26,6 +28,9 @@ try:
     from hermes_yaml import safe_load
 except ImportError:  # outside Hermes
     from yaml import safe_load
+
+if TYPE_CHECKING:  # the router package is importable only after register() runs
+    from polytropos_router.config import RouterConfig
 
 RELEASE_API = "https://api.github.com/repos/Lil-Clanky/polytropos/releases/latest"
 RAW = "https://raw.githubusercontent.com/Lil-Clanky/polytropos"
@@ -306,6 +311,19 @@ def _update_programs(lock: dict, state: State, profile: str, fx: Effects) -> int
     return sum(not _install_program(p, state, profile, fx) for p in chosen)
 
 
+def _canary_check(fx: Effects) -> Callable[[], bool] | None:
+    """The update's extra health check: the tool checks pass on the first cloud model stack-canary can reach."""
+    try:
+        cfg, _ = doctor._router().load_config(hermes_home())
+    except ImportError:  # the router plugin is not installed
+        return None
+    slot = next((s for slots in cfg.routes.values() for s in slots
+                 if not cfg.upstreams[s.upstream].local and _loopback(cfg.upstreams[s.upstream].base_url)), None)
+    if slot is None:
+        return None
+    return lambda: run_canary(cfg, run=fx.run, models=[slot.model]).get(f"{slot.upstream}/{slot.model}") == "pass"
+
+
 def _update_freellmapi(lock: dict, state: State, profile: str, fx: Effects) -> int:
     pin = _pin(lock)
     mode = state.shared.get("freellmapi", {}).get("mode")
@@ -313,7 +331,7 @@ def _update_freellmapi(lock: dict, state: State, profile: str, fx: Effects) -> i
         print(f"FreeLLMAPI does not run as the Polytropos service. This release pins {pin.tag}; update it yourself."
               if mode == "external" else "FreeLLMAPI is not installed. Run hermes polytropos install first.")
         return 0
-    result = fx.fl().update(pin)
+    result = fx.fl().update(pin, check=_canary_check(fx))
     print(f"FreeLLMAPI: {result.message}")
     if result.ok:
         use_shared(state, "freellmapi", profile, version=pin.tag, installed_by_us=True)
@@ -468,9 +486,64 @@ def _status(args, fx: Effects) -> int:
     return 0
 
 
+def _loopback(url: str) -> bool:
+    host = urlparse(url).hostname or ""
+    try:
+        return host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def run_canary(cfg: "RouterConfig", *, run=subprocess.run, models: list[str] | None = None) -> dict[str, str]:
+    """Run stack-canary's tool checks once on each cloud model in the routes (or only those in models), store
+    "<upstream>/<model>" -> pass or fail with the local results and return the new entries."""
+    results = {}
+    for up in cfg.upstreams.values():
+        names = list(dict.fromkeys(s.model for slots in cfg.routes.values() for s in slots
+                                   if s.upstream == up.name and (models is None or s.model in models)))
+        if up.local or not names:
+            continue
+        if not _loopback(up.base_url):
+            print(f"Skipped {up.name}: stack-canary tests only endpoints on this machine, and {up.base_url} is not one.")
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.json"
+            argv = ["canary", "run", "--openai-endpoint", up.base_url]
+            argv += ["--api-key-env", up.api_key_env] if up.api_key_env else []  # stack-canary reads the key itself
+            for name in names:
+                argv += ["--model", name]
+            argv += ["--attempts", "1", "--summary-json", str(summary)]
+            try:
+                run(argv, check=False, cwd=tmp)
+                rows = [r for r in json.loads(summary.read_text())["results"] if isinstance(r, dict)]
+            except (OSError, ValueError, KeyError, TypeError) as err:
+                print(f"stack-canary gave no result for {up.name}: {err}")
+                continue
+        for name in names:
+            status = {r.get("check"): r.get("status") for r in rows if r.get("model") == name}
+            passed = all(status.get(check) == "pass" for check in canary.TOOL_CHECKS)
+            results[f"{up.name}/{name}"] = "pass" if passed else "fail"
+    if results:
+        canary.save_local_results({**canary.load_local_results(), **results})
+    return results
+
+
 def _canary(args, fx: Effects) -> int:
-    print("hermes polytropos canary run is not available yet.")
-    return 1
+    try:
+        cfg, errors = doctor._router().load_config(hermes_home())
+    except ImportError:
+        print("The polytropos-router plugin is not installed, so there are no routes to test.")
+        return 1
+    for error in errors:
+        print(f"The router config has an error, so the default routes are tested: {error}")
+    results = run_canary(cfg, run=fx.run)
+    if not results:
+        print("No cloud model was tested.")
+        return 1
+    print("stack-canary tool checks A1 to A6, one attempt each:")
+    for slot, verdict in sorted(results.items()):
+        print(f"  {verdict:<6}{slot}")
+    return 1 if "fail" in results.values() else 0
 
 
 _COMMANDS = {"doctor": _doctor, "setup": _setup, "install": _install, "adopt": _adopt, "update": _update,
