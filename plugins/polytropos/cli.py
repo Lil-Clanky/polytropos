@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from . import doctor, programs
 from ._shared import canary, paths
-from .freellm import PORT, FreeLLM, Pin, _default_get
+from .freellm import PORT, REPO_URL, FreeLLM, Pin, _default_get
 from .services import ServiceManager
 from .state import (State, config_changes, load_state, record_config_change, release_shared, save_state, set_mode,
                     use_shared)
@@ -392,7 +392,19 @@ def _update(args, fx: Effects) -> int:
     for label in changes:
         print(f"  changes: {label}")
     what = {"all": "the plugins, programs and FreeLLMAPI", "programs": "the programs", "freellmapi": "FreeLLMAPI"}
-    if not _yes(fx, f"Update {what[args.component]} to the versions of {tag}?"):
+    question = f"Update {what[args.component]} to the versions of {tag}?"
+    managed = state.shared.get("freellmapi", {}).get("mode") == "managed"
+    old = fx.fl().current_tag() if managed and args.component != "programs" else ""
+    new = _pin(lock).tag
+    if old == new and args.component == "freellmapi":
+        print(f"FreeLLMAPI is already on {new}.")
+        return 0
+    if old and old != new:  # FreeLLMAPI keeps no changelog file, so GitHub's comparison stands in for it
+        print(f"FreeLLMAPI {old} is installed, and Polytropos {tag} pins FreeLLMAPI {new}.")
+        print(f"What changed in FreeLLMAPI: {REPO_URL.removesuffix('.git')}/compare/{old}...{new}")
+        if args.component == "freellmapi":
+            question = f"Update FreeLLMAPI from {old} to {new}?"
+    if not _yes(fx, question):
         print("Nothing changed.")
         return 0
     if changes:

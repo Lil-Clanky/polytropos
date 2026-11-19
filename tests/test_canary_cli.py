@@ -98,6 +98,9 @@ def test_update_checks_the_first_cloud_model_with_the_canary(tmp_home, fake_cana
     checks = []
 
     class FakeFreeLLM:
+        def current_tag(self):
+            return "v0.16.35"
+
         def update(self, pin, *, check=None):
             checks.append(check())
             return UpdateResult(True, "v0.16.36", pin.tag, False, f"updated to {pin.tag}")

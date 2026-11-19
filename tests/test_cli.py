@@ -275,6 +275,9 @@ class FakeFreeLLM:
     def __init__(self):
         self.updates = []
 
+    def current_tag(self):
+        return "v0.16.36"
+
     def update(self, pin, *, check=None):
         self.updates.append((pin, check))
         return UpdateResult(True, "v0.16.36", pin.tag, False, f"updated to {pin.tag}")
@@ -331,6 +334,25 @@ def test_update_stops_when_an_own_plugin_is_at_another_revision(tmp_home, capsys
     assert "polytropos-router is at aaaaaaa" in capsys.readouterr().out
     assert [c for c in run.commands() if c[:4] != list(pack_cmd)] == []
     assert fl.updates == []
+
+
+def test_update_freellmapi_shows_both_tags_and_the_compare_link_before_it_asks(tmp_home, capsys):
+    managed_state(tmp_home / ".hermes")
+    before, fl, run, asked = load_state(), FakeFreeLLM(), FakeRun(), []
+    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", pack_text(), new_lock_text()),
+                     ask=lambda q: asked.append(q) or "n", freellm=fl)
+    assert cli.handle(parse("update", "freellmapi"), fx) == 0
+    out = capsys.readouterr().out
+    assert "FreeLLMAPI v0.16.36 is installed, and Polytropos v0.2.0 pins FreeLLMAPI v0.16.40." in out
+    assert "https://github.com/tashfeenahmed/freellmapi/compare/v0.16.36...v0.16.40" in out
+    assert asked == ["Update FreeLLMAPI from v0.16.36 to v0.16.40? [y/N] "]
+    assert fl.updates == [] and run.commands() == [] and load_state() == before
+    fx.ask = lambda q: "y"
+    assert cli.handle(parse("update", "freellmapi"), fx) == 0
+    assert [pin for pin, _ in fl.updates] == [Pin("v0.16.40", LOCK["freellmapi"]["commit"])]
+    fl.current_tag, fx.ask = lambda: "v0.16.40", no_questions
+    assert cli.handle(parse("update", "freellmapi"), fx) == 0
+    assert "FreeLLMAPI is already on v0.16.40." in capsys.readouterr().out and len(fl.updates) == 1
 
 
 # --- uninstall ---
