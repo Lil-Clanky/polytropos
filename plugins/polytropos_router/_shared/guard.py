@@ -1,5 +1,6 @@
 """Memory guard: host signals, a verdict, Ollama helpers and a watchdog."""
 
+import http.client
 import json
 import re
 import shutil
@@ -48,8 +49,12 @@ def _sysctl(run, key: str) -> str | None:
 
 
 def _mac_pressure(run) -> str:
-    level = {"1": "normal", "2": "warning", "4": "critical"}
-    return level.get(_sysctl(run, "kern.memorystatus_vm_pressure_level") or "", "unknown")
+    try:
+        level = int(_sysctl(run, "kern.memorystatus_vm_pressure_level") or "")
+    except ValueError:
+        return "unknown"
+    # same threshold as stack-canary: 2 and 3 are warning, 4 and above critical
+    return "normal" if level <= 1 else "warning" if level < 4 else "critical"
 
 
 def _mac_swap(run) -> int | None:
@@ -135,17 +140,29 @@ def _call(url: str, body: dict | None, timeout: float):
         return json.loads(response.read() or b"{}")
 
 
+_LOOKUP_ERRORS = (OSError, ValueError, AttributeError, KeyError, TypeError, http.client.HTTPException)
+
+
+def _models(payload: dict) -> list[dict]:
+    return [m for m in payload.get("models") or [] if isinstance(m, dict)]
+
+
+def _size(model: dict) -> int | None:
+    size = model.get("size")
+    return size if isinstance(size, int) and not isinstance(size, bool) else None
+
+
 def ollama_loaded(base_url: str, *, timeout: float = 2.0) -> list[dict]:
     try:
-        return _call(f"{ollama_root(base_url)}/api/ps", None, timeout).get("models", [])
-    except (OSError, ValueError, AttributeError):
+        return _models(_call(f"{ollama_root(base_url)}/api/ps", None, timeout))
+    except _LOOKUP_ERRORS:
         return []
 
 
 def ollama_unload(base_url: str, model: str, *, timeout: float = 5.0) -> bool:
     try:
         _call(f"{ollama_root(base_url)}/api/generate", {"model": model, "keep_alive": 0}, timeout)
-    except (OSError, ValueError):
+    except _LOOKUP_ERRORS:
         return False
     return True
 
@@ -181,17 +198,17 @@ def ollama_fit(base_url: str, model: str, context: int, *, total_ram: int | None
         return None
     root = ollama_root(base_url)
     try:
-        loaded = _call(f"{root}/api/ps", None, timeout).get("models", [])
+        loaded = _models(_call(f"{root}/api/ps", None, timeout))
         if any(model in (m.get("name"), m.get("model")) for m in loaded):
             return True
-        tags = _call(f"{root}/api/tags", None, timeout).get("models", [])
-        size = next((m["size"] for m in tags if model in (m.get("name"), m.get("model"))), None)
+        tags = _models(_call(f"{root}/api/tags", None, timeout))
+        size = next((_size(m) for m in tags if model in (m.get("name"), m.get("model"))), None)
         info = _call(f"{root}/api/show", {"model": model}, timeout).get("model_info", {})
         kv = kv_cache_bytes(info, context)
         if size is None or kv is None:
             return None
-        return fits(size, kv, total_ram, sum(m.get("size", 0) for m in loaded))
-    except (OSError, ValueError, AttributeError, KeyError):
+        return fits(size, kv, total_ram, sum(_size(m) or 0 for m in loaded))
+    except _LOOKUP_ERRORS:
         return None
 
 

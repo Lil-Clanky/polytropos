@@ -101,3 +101,17 @@ def test_local_results_roundtrip(tmp_home):
     canary.save_local_results({"groq/llama-3.3-70b": "pass", "x/y": "fail"})
     assert canary.local_results_path() == tmp_home / ".local" / "share" / "polytropos" / "canary" / "openai-results.json"
     assert canary.load_local_results() == {"groq/llama-3.3-70b": "pass", "x/y": "fail"}
+
+
+@pytest.mark.parametrize("garbage", ["not json {", "[]", "null"])
+def test_corrupt_cache_does_not_crash(tmp_path, garbage):
+    cache = tmp_path / "m.json"
+    cache.write_text(garbage)
+    assert canary.load_matrix(cache_path=cache, fetch=lambda u: FIXTURE.read_bytes(), now=time.time() + 10).verdict("0.40.16", "llama3.2:3b") == "pass"
+    cache.write_text(garbage)
+
+    def fail(url):
+        raise OSError
+
+    assert canary.load_matrix(cache_path=cache, fetch=fail).verdict("0.40.16", "llama3.2:3b") == "unknown"
+    assert canary.load_matrix(cache_path=tmp_path / "n.json", fetch=lambda u: garbage.encode()).verdict("a", "b") == "unknown"

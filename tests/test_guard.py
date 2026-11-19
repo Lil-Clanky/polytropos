@@ -196,3 +196,40 @@ def test_ollama_fit_against_fake():
         assert guard.ollama_fit(fake.url, "unknown", 8192, total_ram=ram) is None
         routes[("POST", "/api/show")] = (500, {})
         assert guard.ollama_fit(fake.url, "small:3b", 8192, total_ram=ram) is None
+
+
+def test_macos_pressure_level_3_is_warning_and_5_critical():
+    assert mac_signals("3").pressure == "warning"
+    assert mac_signals("8").pressure == "critical"
+    assert mac_signals("abc").pressure == "unknown"
+
+
+def test_null_models_and_sizes_degrade():
+    ram = 16 * GB
+    with Fake({("GET", "/api/ps"): (200, {"models": None})}) as fake:
+        assert guard.ollama_loaded(fake.url) == []
+        assert guard.ollama_fit(fake.url, "m", 8192, total_ram=ram) is None
+    info = {"llama.block_count": 28, "llama.attention.head_count_kv": 8, "llama.embedding_length": 3072, "llama.attention.head_count": 24}
+    routes = {
+        ("GET", "/api/ps"): (200, {"models": [{"name": "x", "size": None}]}),
+        ("GET", "/api/tags"): (200, {"models": [{"name": "m", "size": None}]}),
+        ("POST", "/api/show"): (200, {"model_info": info}),
+    }
+    with Fake(routes) as fake:
+        assert guard.ollama_fit(fake.url, "m", 8192, total_ram=ram) is None
+        routes[("GET", "/api/tags")] = (200, {"models": [{"name": "m", "size": GB}]})
+        assert guard.ollama_fit(fake.url, "m", 8192, total_ram=ram) is True
+    with Fake({("GET", "/api/ps"): (200, {"models": None}), ("GET", "/api/tags"): (200, {"models": None})}) as fake:
+        assert guard.ollama_fit(fake.url, "m", 8192, total_ram=ram) is None
+
+
+def test_http_exception_degrades(monkeypatch):
+    import http.client
+
+    def boom(*a, **k):
+        raise http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr(guard.urllib.request, "urlopen", boom)
+    assert guard.ollama_loaded("http://x") == []
+    assert guard.ollama_unload("http://x", "m") is False
+    assert guard.ollama_fit("http://x", "m", 1, total_ram=GB) is None

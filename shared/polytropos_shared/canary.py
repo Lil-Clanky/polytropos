@@ -41,6 +41,8 @@ class Matrix:
 
 
 def parse_matrix(data: dict) -> Matrix:
+    if not isinstance(data, dict):
+        raise ValueError("matrix is not a JSON object")
     if data.get("schema") != 1:
         raise ValueError(f"unsupported matrix schema: {data.get('schema')!r}")
     return Matrix(Cell(c["ollama"], c["model"], c["check"], c["status"]) for c in data.get("cells", []))
