@@ -25,7 +25,7 @@ PORT = 3001
 _URL = f"http://127.0.0.1:{PORT}/v1/models"
 _DATA_FILES = ("freeapi.db", "freeapi.db-wal", "freeapi.db-shm", ".encryption-key", ".env")  # WAL is on in FreeLLMAPI
 _SECRET_FILES = {".encryption-key", ".env"}
-_KEY_LINE = re.compile(r"^\s*(?:export\s+)?ENCRYPTION_KEY\s*[=:]\s*(\S*)")
+_KEY_LINE = re.compile(r"^\s*(?:export\s+)?ENCRYPTION_KEY(?:\s*=|:\s)\s*([^\s#]*)")
 _PLACEHOLDER = "your-64-char-hex-key-here"  # crypto.ts treats this value as no key
 
 
@@ -73,13 +73,20 @@ class DataExists(Exception):
     pass
 
 
+class RestartFailed(Exception):
+    """The data and release were restored but the service did not start."""
+
+
 def _default_get(url: str, headers: dict) -> tuple[int, bytes]:
     """(0, b"") when the connection is refused, (-1, b"") when something listens but does not answer HTTP."""
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=3) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as err:
-        return err.code, err.read()
+        try:
+            return err.code, err.read()
+        except (OSError, http.client.HTTPException):  # cut-off body: the status code still counts
+            return err.code, b""
     except urllib.error.URLError as err:
         return (0 if isinstance(err.reason, ConnectionRefusedError) else -1), b""
     except ConnectionRefusedError:
@@ -91,6 +98,7 @@ def _default_get(url: str, headers: dict) -> tuple[int, bytes]:
 class FreeLLM:
     ready_timeout = 60.0
     stop_timeout = 30.0
+    retry_delay = 1.0
 
     def __init__(self, *, root: Path | None = None, run=subprocess.run,
                  services: ServiceManager | None = None,
@@ -174,7 +182,7 @@ class FreeLLM:
     def ensure_env(self) -> Path:
         data = self._data_dir()
         env = data / ".env"
-        lines = env.read_text().splitlines() if env.exists() else []
+        lines = env.read_text(encoding="utf-8-sig").splitlines() if env.exists() else []
         found = [i for i, line in enumerate(lines) if _KEY_LINE.match(line)]  # dotenv uses the last definition
         if not found or not _usable_key(_KEY_LINE.match(lines[found[-1]]).group(1)):
             key_file = data / ".encryption-key"
@@ -245,6 +253,9 @@ class FreeLLM:
         present = [name for name in _DATA_FILES if (data / name).exists()]
         if present:
             raise DataExists(f"{data} already holds {', '.join(present)}; clear it by hand before adopting")
+        ok, why = self.node_ok()  # check before copying, so a failed adopt can be retried
+        if not ok:
+            raise NodeMissing(why)
         for name in _DATA_FILES:
             src = source_checkout / (".env" if name == ".env" else f"server/data/{name}")  # .env: where env.ts looks
             if src.is_file():
@@ -295,7 +306,16 @@ class FreeLLM:
         self._restore(backup)
         if old_tag:
             self._point(old_tag)
-        self.services.start()
+        try:
+            self.services.start()
+        except Exception:  # launchd can still be busy with the bootout
+            time.sleep(self.retry_delay)
+            try:
+                self.services.start()
+            except Exception as err:
+                raise RestartFailed(
+                    f"restored {old_tag or 'the backup'} but it did not start: {err}. "
+                    f"Start it by hand with: {self.services.manual_start_hint()}") from err
         return self._wait_ready()
 
     def _restart_old(self) -> str:
@@ -334,9 +354,10 @@ class FreeLLM:
             return UpdateResult(True, old, pin.tag, False, f"updated to {pin.tag}")
         try:
             back = self._revert(backup, old)
+        except RestartFailed as err:
+            return UpdateResult(False, old, pin.tag, True, f"health check failed; {err}")
         except Exception as err:
-            return UpdateResult(False, old, pin.tag, False,
-                                f"health check failed and the restore failed ({err}); run rollback")
+            return UpdateResult(False, old, pin.tag, False, f"health check failed and the restore failed ({err})")
         return UpdateResult(False, old, pin.tag, True,
                             f"health check failed; restored {old or 'the backup'}" + ("" if back else ", which does not answer yet"))
 
@@ -349,7 +370,7 @@ class FreeLLM:
         old, new = newest.name.split("-", 1)[1].split("-to-", 1)
         if current != new:
             return UpdateResult(False, current, old, False,
-                                f"the newest backup is for the update to {new}, but {current or 'no release'} is running; "
+                                f"the newest backup is for the update to {new}, but {current or 'no release'} is current; "
                                 "it was already restored or is out of date, so nothing changed")
         if not (self.root / "releases" / old).is_dir() and old != "none":
             return UpdateResult(False, new, old, False, f"release {old} is no longer on disk")
@@ -357,6 +378,8 @@ class FreeLLM:
             back = self._revert(newest, "" if old == "none" else old)
         except BuildError as err:
             return UpdateResult(False, new, old, False, f"nothing changed: {err}")
+        except RestartFailed as err:
+            return UpdateResult(False, new, old, True, str(err))
         return UpdateResult(True, new, old, True, f"restored {old}" + ("" if back else ", which does not answer yet"))
 
     def cli_command(self, lock: dict) -> list[str]:

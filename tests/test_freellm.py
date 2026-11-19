@@ -53,6 +53,9 @@ class FakeServices:
     def is_running(self):
         return self.running
 
+    def manual_start_hint(self):
+        return "start-by-hand"
+
 
 def make(tmp_home, *, status=(200, b'{"data": []}'), run=None, services=None):
     box = {"get": status}
@@ -60,6 +63,7 @@ def make(tmp_home, *, status=(200, b'{"data": []}'), run=None, services=None):
                   http_get=lambda url, headers: box["get"], node="node")
     fl_.ready_timeout = 0
     fl_.stop_timeout = 0
+    fl_.retry_delay = 0
     fl_.box = box
     svc, up = fl_.services, status
 
@@ -491,3 +495,98 @@ def test_rollback_refuses_a_stale_backup(tmp_home):
     (g.root / "data/freeapi.db").write_text("written-since")
     assert g.rollback().ok is False           # second rollback must not apply the backup again
     assert (g.root / "data/freeapi.db").read_text() == "written-since"
+
+
+# --- fix round 2 ---
+
+def _start_script(f, plan):
+    """plan: list of booleans per start() call, True = raises."""
+    orig, calls = f.services.start, []
+
+    def start():
+        calls.append(1)
+        if plan[len(calls) - 1]:
+            raise RuntimeError("Bootstrap failed: 5")
+        orig()
+
+    f.services.start = start
+    return calls
+
+
+def test_update_revert_start_failure_reports_restored_tag(tmp_home):
+    f = _installed(tmp_home)
+    _start_script(f, [True, True, True])
+    result = f.update(NEW)
+    assert (result.ok, result.rolled_back) == (False, True)
+    assert "restored v0.16.8" in result.message and "did not start" in result.message
+    assert "start-by-hand" in result.message and "run rollback" not in result.message
+    assert (f.root / "data/freeapi.db").read_text() == "old-data"
+
+
+def test_update_revert_retries_the_start_once(tmp_home):
+    f = _installed(tmp_home)
+    calls = _start_script(f, [True, True, False])
+    result = f.update(NEW)
+    assert (result.ok, result.rolled_back) == (False, True) and "did not start" not in result.message
+    assert len(calls) == 3
+
+
+def test_rollback_start_failure_is_reported_not_raised(tmp_home):
+    f = _installed(tmp_home)
+    f.update(NEW, check=lambda: True)
+    _start_script(f, [True, True])
+    result = f.rollback()
+    assert (result.ok, result.rolled_back) == (False, True)
+    assert "restored v0.16.8" in result.message and "start-by-hand" in result.message
+    assert (f.root / "current").resolve().name == "v0.16.8"
+
+
+def test_rollback_refusal_says_current(tmp_home):
+    f = _installed(tmp_home)
+    f.update(NEW, check=lambda: False)
+    msg = f.rollback().message
+    assert "is current" in msg and "is running" not in msg
+
+
+@pytest.mark.parametrize("line", ["ENCRYPTION_KEY= # note", "ENCRYPTION_KEY=#x", "ENCRYPTION_KEY:" + "a" * 64])
+def test_ensure_env_treats_dotenv_empty_lines_as_missing(tmp_home, line):
+    f = make(tmp_home)
+    _env(f, line + "\n")
+    (f.root / "data/.encryption-key").write_text("e" * 64)
+    assert "ENCRYPTION_KEY=" + "e" * 64 in f.ensure_env().read_text().splitlines()
+
+
+def test_ensure_env_sees_key_behind_bom(tmp_home):
+    f = make(tmp_home)
+    (f.root / "data").mkdir(parents=True)
+    (f.root / "data/.env").write_bytes(b"\xef\xbb\xbfENCRYPTION_KEY=" + b"a" * 64 + b"\nFOO=1\n")
+    text = f.ensure_env().read_text()
+    assert text.count("ENCRYPTION_KEY") == 1 and "a" * 64 in text
+
+
+def test_adopt_with_node_missing_changes_nothing(tmp_home):
+    src = tmp_home / "checkout"
+    (src / "server/data").mkdir(parents=True)
+    (src / "server/data/freeapi.db").write_text("db")
+    f = make(tmp_home, status=(0, b""), run=FakeRun(node="v18.0.0"))
+    with pytest.raises(NodeMissing):
+        f.adopt(src, NEW)
+    assert list((f.root / "data").iterdir()) == []
+
+
+def test_default_get_keeps_status_when_error_body_is_cut_off():
+    import socket
+    import threading
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def run():
+        conn, _ = srv.accept()
+        conn.recv(4096)
+        conn.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 100\r\n\r\nshort")
+        conn.close()
+        srv.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    assert fl._default_get(f"http://127.0.0.1:{srv.getsockname()[1]}/v1/models", {}) == (404, b"")

@@ -96,6 +96,13 @@ class ServiceManager:
             self._check(self._exec("launchctl", "bootstrap", f"gui/{self._uid}", str(self.path())))
         self._check(self._exec("launchctl", "kickstart", "-k", self._target))
 
+    def manual_start_hint(self) -> str:
+        """The command a user can run by hand when start() fails."""
+        if self._mac:
+            return (f"launchctl bootstrap gui/{self._uid} {self.path()} && "
+                    f"launchctl kickstart -k {self._target}")
+        return f"systemctl --user restart {SYSTEMD_UNIT}"
+
     def stop(self) -> None:
         if self._mac:
             self._exec("launchctl", "bootout", self._target)
