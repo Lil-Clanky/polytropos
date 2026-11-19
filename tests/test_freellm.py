@@ -59,7 +59,19 @@ def make(tmp_home, *, status=(200, b'{"data": []}'), run=None, services=None):
     fl_ = FreeLLM(root=tmp_home / "fl", run=run or FakeRun(), services=services or FakeServices(),
                   http_get=lambda url, headers: box["get"], node="node")
     fl_.ready_timeout = 0
+    fl_.stop_timeout = 0
     fl_.box = box
+    svc, up = fl_.services, status
+
+    def stop(orig=svc.stop):
+        orig()
+        box["get"] = (0, b"")
+
+    def start(orig=svc.start):
+        orig()
+        box["get"] = up
+
+    svc.stop, svc.start = stop, start
     return fl_
 
 
@@ -98,7 +110,8 @@ def test_install_writes_service_spec_then_times_out(tmp_home):
     spec = f.services.spec
     assert spec.program == ["node", str(f.root / "current/server/dist/index.js")]
     assert spec.env == {"PORT": "3001", "HOST": "127.0.0.1", "NODE_ENV": "production",
-                        "FREEAPI_ENV_PATH": str(f.root / "data/.env")}
+                        "FREEAPI_ENV_PATH": str(f.root / "data/.env"),
+                        "FREEAPI_DB_PATH": str(f.root / "data/freeapi.db")}
     assert spec.workdir == f.root / "current"
     assert (f.root / "current").resolve().name == "v0.16.9"
     assert stat.S_IMODE((f.root / "data/.env").stat().st_mode) == 0o600
@@ -137,7 +150,7 @@ def test_build_failed_step_removes_release(tmp_home):
     assert not (f.root / "releases/v0.16.9").exists()
 
 
-def test_build_links_data_and_runs_steps(tmp_home):
+def test_build_links_data(tmp_home):
     run = FakeRun()
     f = make(tmp_home, run=run)
     dest = f.build(NEW)
@@ -191,7 +204,7 @@ def test_backup_prunes_to_five(tmp_home):
 
 def _installed(tmp_home, **kw):
     f = make(tmp_home, **kw)
-    (f.root / "data").mkdir(parents=True)
+    f._data_dir()
     (f.root / "data/freeapi.db").write_text("old-data")
     f.build(OLD)
     f._point("v0.16.8")
@@ -261,7 +274,9 @@ def test_adopt_copies_data_and_refuses_while_running(tmp_home):
     (src / "server/data").mkdir(parents=True)
     (src / "server/data/freeapi.db").write_text("db")
     (src / "server/data/.encryption-key").write_text("d" * 64)
-    (src / "server/.env").write_text("FOO=1\n")
+    (src / ".env").write_text("FOO=1\n")
+    (src / "server").mkdir(exist_ok=True)
+    (src / "server/.env").write_text("STRAY=1\n")
     f = make(tmp_home)  # answers on the port
     with pytest.raises(PortBusy):
         f.adopt(src, NEW)
@@ -273,7 +288,7 @@ def test_adopt_copies_data_and_refuses_while_running(tmp_home):
     g.adopt(src, NEW)
     assert (g.root / "data/freeapi.db").read_text() == "db"
     env = (g.root / "data/.env").read_text()
-    assert "FOO=1" in env and "ENCRYPTION_KEY=" + "d" * 64 in env
+    assert "FOO=1" in env and "ENCRYPTION_KEY=" + "d" * 64 in env and "STRAY" not in env
 
 
 @pytest.mark.parametrize("version,ok", [("v20.18.0", True), ("v24.9.1", True), ("v25.1.0", False),
@@ -306,3 +321,173 @@ def test_cli_command(tmp_home):
     set_mode(state, "freellmapi", "managed")
     save_state(state)
     assert f.cli_command(lock) == ["node", str(f.root / "current/cli/dist/index.js")]
+
+
+# --- fix round 1 ---
+
+def _env(f, text):
+    (f.root / "data").mkdir(parents=True, exist_ok=True)
+    (f.root / "data/.env").write_text(text)
+
+
+def test_ensure_env_replaces_placeholder_with_key_file(tmp_home):
+    f = make(tmp_home)
+    _env(f, "FOO=1\nENCRYPTION_KEY=your-64-char-hex-key-here\nBAR=2\n")
+    (f.root / "data/.encryption-key").write_text("e" * 64)
+    assert f.ensure_env().read_text() == "FOO=1\nENCRYPTION_KEY=" + "e" * 64 + "\nBAR=2\n"
+
+
+@pytest.mark.parametrize("line", ["ENCRYPTION_KEY=", "ENCRYPTION_KEY=   ", 'ENCRYPTION_KEY=""'])
+def test_ensure_env_replaces_empty_value(tmp_home, line):
+    f = make(tmp_home)
+    _env(f, f"{line}\nBAR=2\n")
+    text = f.ensure_env().read_text()
+    assert len(text.splitlines()[0].split("=", 1)[1]) == 64 and text.endswith("BAR=2\n")
+
+
+@pytest.mark.parametrize("line", ["export ENCRYPTION_KEY=" + "a" * 64, "ENCRYPTION_KEY = " + "a" * 64,
+                                  "  ENCRYPTION_KEY: " + "a" * 64])
+def test_ensure_env_keeps_other_line_forms(tmp_home, line):
+    f = make(tmp_home)
+    _env(f, line + "\n")
+    assert f.ensure_env().read_text() == line + "\n"
+
+
+def test_ensure_env_last_definition_decides(tmp_home):
+    f = make(tmp_home)
+    _env(f, "ENCRYPTION_KEY=" + "a" * 64 + "\nENCRYPTION_KEY=your-64-char-hex-key-here\n")
+    (f.root / "data/.encryption-key").write_text("e" * 64)
+    assert f.ensure_env().read_text().splitlines()[-1] == "ENCRYPTION_KEY=" + "e" * 64
+
+
+def test_dirs_and_env_are_private(tmp_home):
+    f = _installed(tmp_home)
+    f.ensure_env()
+    f.backup("a-to-b")
+    for d in (f.root / "data", f.root / "backups", *(f.root / "backups").iterdir()):
+        assert stat.S_IMODE(d.stat().st_mode) == 0o700
+    assert not list((f.root / "data").glob(".env.*"))  # temp file was replaced
+
+
+def test_backup_names_use_utc(tmp_home, monkeypatch):
+    import time
+    from datetime import datetime, timezone
+    monkeypatch.setenv("TZ", "Pacific/Auckland")
+    time.tzset()
+    try:
+        f = make(tmp_home)
+        name = f.backup("a-to-b").name
+        stamp = datetime.strptime(name.split("-", 1)[0], "%Y%m%dT%H%M%S%f").replace(tzinfo=timezone.utc)
+        assert abs((datetime.now(timezone.utc) - stamp).total_seconds()) < 120
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
+
+
+def test_adopt_refuses_when_data_holds_files(tmp_home):
+    src = tmp_home / "checkout"
+    (src / "server/data").mkdir(parents=True)
+    (src / "server/data/freeapi.db").write_text("adopted")
+    f = make(tmp_home, status=(0, b""))
+    (f.root / "data").mkdir(parents=True)
+    (f.root / "data/.env").write_text("ENCRYPTION_KEY=x\n")
+    (f.root / "data/freeapi.db-wal").write_text("w")
+    with pytest.raises(fl.DataExists, match=r"\.env.*freeapi\.db-wal|freeapi\.db-wal.*\.env"):
+        f.adopt(src, NEW)
+    assert not (f.root / "data/freeapi.db").exists()
+    assert f.services.events == []
+
+
+def test_default_get_classifies_failures():
+    import socket
+    import threading
+
+    def serve(reply):
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+
+        def run():
+            conn, _ = srv.accept()
+            if reply is not None:
+                conn.sendall(reply)
+            conn.close()
+            srv.close()
+
+        threading.Thread(target=run, daemon=True).start()
+        return f"http://127.0.0.1:{srv.getsockname()[1]}/v1/models"
+
+    assert fl._default_get(serve(b"SSH-2.0-banner\r\n"), {})[0] == -1   # not HTTP
+    assert fl._default_get(serve(None), {})[0] == -1                       # accepts, then closes
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{free.getsockname()[1]}/v1/models"
+    free.close()
+    assert fl._default_get(url, {}) == (0, b"")                            # refused
+
+
+def test_detect_counts_non_http_listener_as_listening(tmp_home):
+    d = make(tmp_home, status=(-1, b"")).detect()
+    assert (d.listening, d.is_freellmapi) == (True, False)
+
+
+def test_update_backup_failure_restarts_old_service(tmp_home):
+    f = _installed(tmp_home)
+    f.backup = lambda label: (_ for _ in ()).throw(OSError("disk full"))
+    result = f.update(NEW)
+    assert (result.ok, result.rolled_back) == (False, False) and "disk full" in result.message
+    assert f.services.events == ["stop", "start"]
+    assert (f.root / "current").resolve().name == "v0.16.8"
+
+
+def test_update_start_raising_reverts(tmp_home, capsys):
+    f = _installed(tmp_home)
+    orig = f.services.start
+    calls = []
+
+    def start():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("bootstrap failed")
+        orig()
+
+    f.services.start = start
+    result = f.update(NEW)
+    assert (result.ok, result.rolled_back) == (False, True)
+    assert (f.root / "current").resolve().name == "v0.16.8"
+    assert (f.root / "data/freeapi.db").read_text() == "old-data"
+
+
+def test_update_check_raising_reverts(tmp_home):
+    f = _installed(tmp_home)
+
+    def boom():
+        raise RuntimeError("x")
+
+    assert f.update(NEW, check=boom).rolled_back is True
+
+
+def test_update_does_not_copy_while_service_still_listens(tmp_home):
+    f = _installed(tmp_home)
+    f.services.stop = lambda: None            # service ignores the stop
+    f.box["get"] = (200, b"{}")
+    result = f.update(NEW)
+    assert result.ok is False and "stop" in result.message
+    assert not (f.root / "backups").exists() or not list((f.root / "backups").iterdir())
+    assert (f.root / "current").resolve().name == "v0.16.8"
+
+
+def test_rollback_refuses_a_stale_backup(tmp_home):
+    f = _installed(tmp_home)
+    f.update(NEW, check=lambda: False)        # rolled back automatically
+    (f.root / "data/freeapi.db").write_text("written-since")
+    result = f.rollback()
+    assert result.ok is False and result.from_tag == "v0.16.8"
+    assert (f.root / "data/freeapi.db").read_text() == "written-since"
+
+    g = _installed(tmp_home / "two")
+    g.update(NEW, check=lambda: True)
+    assert g.rollback().ok is True
+    (g.root / "data/freeapi.db").write_text("written-since")
+    assert g.rollback().ok is False           # second rollback must not apply the backup again
+    assert (g.root / "data/freeapi.db").read_text() == "written-since"

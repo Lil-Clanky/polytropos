@@ -36,7 +36,7 @@ def test_plist_roundtrip():
 def test_systemd_quotes_spaces():
     text = render_systemd(SPEC)
     assert 'ExecStart="/opt/my node/bin/node" "/data/with space/current/server/dist/index.js"' in text
-    assert 'WorkingDirectory="/data/with space/current"' in text
+    assert "WorkingDirectory=/data/with space/current\n" in text  # systemd does not strip quotes here
     assert 'Environment="PORT=3001"' in text
     assert "Description=Polytropos FreeLLMAPI" in text
     assert "Restart=on-failure" in text and "WantedBy=default.target" in text

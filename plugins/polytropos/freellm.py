@@ -6,11 +6,13 @@ import re
 import secrets
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+import http.client
 from pathlib import Path
 from typing import Callable
 
@@ -23,6 +25,13 @@ PORT = 3001
 _URL = f"http://127.0.0.1:{PORT}/v1/models"
 _DATA_FILES = ("freeapi.db", "freeapi.db-wal", "freeapi.db-shm", ".encryption-key", ".env")  # WAL is on in FreeLLMAPI
 _SECRET_FILES = {".encryption-key", ".env"}
+_KEY_LINE = re.compile(r"^\s*(?:export\s+)?ENCRYPTION_KEY\s*[=:]\s*(\S*)")
+_PLACEHOLDER = "your-64-char-hex-key-here"  # crypto.ts treats this value as no key
+
+
+def _usable_key(raw: str) -> bool:
+    value = raw.strip("'\"")
+    return bool(value) and value != _PLACEHOLDER
 
 
 @dataclass(frozen=True)
@@ -60,19 +69,28 @@ class NodeMissing(Exception):
     pass
 
 
+class DataExists(Exception):
+    pass
+
+
 def _default_get(url: str, headers: dict) -> tuple[int, bytes]:
-    """(0, b"") when nothing answers."""
+    """(0, b"") when the connection is refused, (-1, b"") when something listens but does not answer HTTP."""
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=3) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as err:
         return err.code, err.read()
-    except (urllib.error.URLError, OSError):
+    except urllib.error.URLError as err:
+        return (0 if isinstance(err.reason, ConnectionRefusedError) else -1), b""
+    except ConnectionRefusedError:
         return 0, b""
+    except (OSError, http.client.HTTPException):
+        return -1, b""
 
 
 class FreeLLM:
     ready_timeout = 60.0
+    stop_timeout = 30.0
 
     def __init__(self, *, root: Path | None = None, run=subprocess.run,
                  services: ServiceManager | None = None,
@@ -130,7 +148,7 @@ class FreeLLM:
             if dest.exists() or dest.is_symlink():
                 shutil.rmtree(dest)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            data.mkdir(parents=True, exist_ok=True)
+            self._data_dir()
             self._step(["git", "clone", "--depth", "1", "--branch", pin.tag, REPO_URL, str(dest)])
             head = self._step(["git", "rev-parse", "HEAD"], cwd=dest).strip()
             if head != pin.commit:
@@ -148,20 +166,32 @@ class FreeLLM:
             raise err if isinstance(err, BuildError) else BuildError(str(err)) from err
         return dest
 
-    def ensure_env(self) -> Path:
+    def _data_dir(self) -> Path:
         data = self.root / "data"
-        data.mkdir(parents=True, exist_ok=True)
+        data.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return data
+
+    def ensure_env(self) -> Path:
+        data = self._data_dir()
         env = data / ".env"
-        text = env.read_text() if env.exists() else ""
-        if not re.search(r"^ENCRYPTION_KEY=\S", text, re.M):
+        lines = env.read_text().splitlines() if env.exists() else []
+        found = [i for i, line in enumerate(lines) if _KEY_LINE.match(line)]  # dotenv uses the last definition
+        if not found or not _usable_key(_KEY_LINE.match(lines[found[-1]]).group(1)):
             key_file = data / ".encryption-key"
             key = key_file.read_text().strip() if key_file.exists() else ""
-            key = key or secrets.token_hex(32)
-            if text and not text.endswith("\n"):
-                text += "\n"
-            fd = os.open(env, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as handle:
-                handle.write(f"{text}ENCRYPTION_KEY={key}\n")
+            key = key if _usable_key(key) else secrets.token_hex(32)
+            if found:
+                lines[found[-1]] = f"ENCRYPTION_KEY={key}"
+            else:
+                lines.append(f"ENCRYPTION_KEY={key}")
+            fd, tmp = tempfile.mkstemp(dir=data, prefix=".env.")  # mode 0o600; replace keeps the old file safe
+            try:
+                with os.fdopen(fd, "w") as handle:
+                    handle.write("\n".join(lines) + "\n")
+                os.replace(tmp, env)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
         env.chmod(0o600)
         return env
 
@@ -188,7 +218,8 @@ class FreeLLM:
         return ServiceSpec(
             program=[self.node, str(self.root / "current/server/dist/index.js")],
             env={"PORT": str(PORT), "HOST": "127.0.0.1", "NODE_ENV": "production",
-                 "FREEAPI_ENV_PATH": str(self.root / "data/.env")},
+                 "FREEAPI_ENV_PATH": str(self.root / "data/.env"),
+                 "FREEAPI_DB_PATH": str(self.root / "data/freeapi.db")},
             workdir=self.root / "current",
             log_path=paths.state_dir() / "freellmapi.log",
         )
@@ -210,14 +241,13 @@ class FreeLLM:
     def adopt(self, source_checkout: Path, pin: Pin) -> None:
         if self.detect().listening:
             raise PortBusy(f"port {PORT} still answers; stop the old FreeLLMAPI first")
-        data = self.root / "data"
-        data.mkdir(parents=True, exist_ok=True)
+        data = self._data_dir()
+        present = [name for name in _DATA_FILES if (data / name).exists()]
+        if present:
+            raise DataExists(f"{data} already holds {', '.join(present)}; clear it by hand before adopting")
         for name in _DATA_FILES:
-            candidates = [source_checkout / "server" / "data" / name]
-            if name == ".env":
-                candidates = [source_checkout / "server" / ".env", source_checkout / ".env"]
-            src = next((c for c in candidates if c.is_file()), None)
-            if src:
+            src = source_checkout / (".env" if name == ".env" else f"server/data/{name}")  # .env: where env.ts looks
+            if src.is_file():
                 shutil.copy2(src, data / name)
                 if name in _SECRET_FILES:
                     (data / name).chmod(0o600)
@@ -226,8 +256,10 @@ class FreeLLM:
     # --- backups, update, rollback ---
 
     def backup(self, label: str) -> Path:
-        dest = self.root / "backups" / f"{datetime.now().strftime('%Y%m%dT%H%M%S%f')}-{label}"
-        dest.mkdir(parents=True)
+        backups = self.root / "backups"
+        backups.mkdir(mode=0o700, parents=True, exist_ok=True)
+        dest = backups / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')}-{label}"
+        dest.mkdir(mode=0o700)
         self._copy_data(self.root / "data", dest)
         old = sorted(p for p in dest.parent.iterdir() if p.is_dir())
         for stale in old[:-5]:
@@ -249,13 +281,29 @@ class FreeLLM:
             (data / name).unlink(missing_ok=True)
         self._copy_data(backup, data)
 
-    def _revert(self, backup: Path, old_tag: str) -> bool:
+    def _stop(self) -> None:
+        """Stop the service and wait until port 3001 is free, so nobody copies a database in use."""
         self.services.stop()
+        deadline = time.monotonic() + self.stop_timeout
+        while self.detect().listening:
+            if time.monotonic() >= deadline:
+                raise BuildError(f"the service did not stop; port {PORT} still answers")
+            time.sleep(0.5)
+
+    def _revert(self, backup: Path, old_tag: str) -> bool:
+        self._stop()
         self._restore(backup)
         if old_tag:
             self._point(old_tag)
         self.services.start()
         return self._wait_ready()
+
+    def _restart_old(self) -> str:
+        try:
+            self.services.start()
+            return ""
+        except Exception as err:
+            return f" The old service did not restart: {err}"
 
     def update(self, pin: Pin, *, check: Callable[[], bool] | None = None) -> UpdateResult:
         old = self.current_tag()
@@ -265,31 +313,50 @@ class FreeLLM:
             self.build(pin)  # the running service stays up
         except BuildError as err:
             return UpdateResult(False, old, pin.tag, False, f"build failed, nothing changed: {err}")
-        self.services.stop()
-        backup = self.backup(f"{old or 'none'}-to-{pin.tag}")
-        self._point(pin.tag)
-        self.services.start()
-        healthy = self._wait_ready() and self.health()
-        if healthy and check is not None:
-            try:
+        try:
+            self._stop()
+        except BuildError as err:
+            return UpdateResult(False, old, pin.tag, False, f"nothing changed: {err}")
+        try:
+            backup = self.backup(f"{old or 'none'}-to-{pin.tag}")
+        except OSError as err:
+            return UpdateResult(False, old, pin.tag, False,
+                                f"backup failed, nothing changed: {err}." + self._restart_old())
+        try:
+            self._point(pin.tag)
+            self.services.start()
+            healthy = self._wait_ready() and self.health()
+            if healthy and check is not None:
                 healthy = bool(check())
-            except Exception:  # a crashing check counts as a failed check
-                healthy = False
+        except Exception:  # any failure after the stop counts as a failed health check
+            healthy = False
         if healthy:
             return UpdateResult(True, old, pin.tag, False, f"updated to {pin.tag}")
-        back = self._revert(backup, old)
+        try:
+            back = self._revert(backup, old)
+        except Exception as err:
+            return UpdateResult(False, old, pin.tag, False,
+                                f"health check failed and the restore failed ({err}); run rollback")
         return UpdateResult(False, old, pin.tag, True,
                             f"health check failed; restored {old or 'the backup'}" + ("" if back else ", which does not answer yet"))
 
     def rollback(self) -> UpdateResult:
+        current = self.current_tag()
         backups = sorted(p for p in (self.root / "backups").glob("*-to-*") if p.is_dir())
         if not backups:
-            return UpdateResult(False, self.current_tag(), "", False, "no update backup found")
+            return UpdateResult(False, current, "", False, "no update backup found")
         newest = backups[-1]
         old, new = newest.name.split("-", 1)[1].split("-to-", 1)
+        if current != new:
+            return UpdateResult(False, current, old, False,
+                                f"the newest backup is for the update to {new}, but {current or 'no release'} is running; "
+                                "it was already restored or is out of date, so nothing changed")
         if not (self.root / "releases" / old).is_dir() and old != "none":
             return UpdateResult(False, new, old, False, f"release {old} is no longer on disk")
-        back = self._revert(newest, "" if old == "none" else old)
+        try:
+            back = self._revert(newest, "" if old == "none" else old)
+        except BuildError as err:
+            return UpdateResult(False, new, old, False, f"nothing changed: {err}")
         return UpdateResult(True, new, old, True, f"restored {old}" + ("" if back else ", which does not answer yet"))
 
     def cli_command(self, lock: dict) -> list[str]:

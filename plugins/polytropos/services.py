@@ -42,7 +42,7 @@ def render_systemd(spec: ServiceSpec) -> str:
     return (
         "[Unit]\nDescription=Polytropos FreeLLMAPI\n\n"
         f"[Service]\nExecStart={' '.join(_q(a) for a in spec.program)}\n{env}"
-        f"WorkingDirectory={_q(str(spec.workdir))}\nRestart=on-failure\n\n"
+        f"WorkingDirectory={str(spec.workdir).replace('%', '%%')}\nRestart=on-failure\n\n"
         "[Install]\nWantedBy=default.target\n"
     )
 
