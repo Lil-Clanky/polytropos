@@ -5,3 +5,4 @@ __pycache__/
 .superpowers/
 .worktrees/
 plugins/*/_shared/.*.??????*
+.sandbox/

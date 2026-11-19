@@ -1,0 +1,95 @@
+# Pinned programs for Polytropos. Every value was looked up on 2026-11-19.
+# The controller refreshes these through scripts/check_updates.py.
+
+# FreeLLMAPI, license MIT.
+# tag and commit: git ls-remote --tags https://github.com/tashfeenahmed/freellmapi (v0.16.36).
+# cli_version: npm view freellmapi version (the npm CLI has its own version line).
+[freellmapi]
+tag = "v0.16.36"
+commit = "dd0fb71351746ed7bfcbe061a7aa7c6bdb291e1d"
+node = ">=20.18.0 <25.0.0"
+cli_version = "0.8.2"
+
+# rtk, license Apache-2.0 (the archive also ships LICENSE-ENGINE).
+# Repository found from the Homebrew formula homepage (rtk-ai.app) and the GitHub API.
+# Assets are the plain "rtk-<target>" archives of release v1.2.1. SHA-256 values come from the
+# release's checksums.txt and the asset digests of `gh release view -R rtk-ai/rtk`; the
+# darwin-arm64 archive was also downloaded and hashed (same value).
+# The release has no x86_64 linux gnu build, so both linux entries use the static musl builds.
+[rtk]
+version = "1.2.1"
+repo = "https://github.com/rtk-ai/rtk"
+
+[rtk.assets.darwin-arm64]
+url = "https://github.com/rtk-ai/rtk/releases/download/v1.2.1/rtk-aarch64-apple-darwin.tar.gz"
+sha256 = "3bc2a92f1d3e404ef99c200cddcc0f4917d6c4ed5b127a751938a96f57d4ed9a"
+
+[rtk.assets.darwin-x86_64]
+url = "https://github.com/rtk-ai/rtk/releases/download/v1.2.1/rtk-x86_64-apple-darwin.tar.gz"
+sha256 = "107e272253c0aa36c9c85fbf9dd188bdb58d86c6ba9a85b49122420baf6e4c5c"
+
+[rtk.assets.linux-x86_64]
+url = "https://github.com/rtk-ai/rtk/releases/download/v1.2.1/rtk-x86_64-unknown-linux-musl.tar.gz"
+sha256 = "75f64525711be935657a6b228d929c24bd9d1ab7d640ea374a8b913e5b5bac05"
+
+[rtk.assets.linux-aarch64]
+url = "https://github.com/rtk-ai/rtk/releases/download/v1.2.1/rtk-aarch64-unknown-linux-musl.tar.gz"
+sha256 = "cae1a911eda9e898dbb90039436e9d53922b20afb1e3e4ae341f749eb62b7781"
+
+# graphify, license MIT (PyPI package graphifyy). Version from https://pypi.org/pypi/graphifyy/json.
+[graphify]
+package = "graphifyy"
+version = "0.9.112"
+
+# ast-grep, license MIT (PyPI package ast-grep-cli). Version from https://pypi.org/pypi/ast-grep-cli/json.
+[ast-grep]
+package = "ast-grep-cli"
+version = "0.51.3"
+
+# stack-canary, license MIT (own repository).
+# The ref is the current main commit (git rev-parse main). The controller replaces it with
+# the commit of the release branch once Task 19 has landed.
+[stack-canary]
+repo = "https://github.com/Lil-Clanky/stack-canary"
+ref = "e3e5bd68c43215a3698a74070924483f5a68f2ea"
+
+# Ollama, license MIT.
+# version: newest row of the published stack-canary matrix (MATRIX.md, identical in the publish
+# worktree and on the matrix branch) where llama3.2:3b passes every check (A1 to A6 and B6 on
+# Hermes v0.23.2): 0.40.16.
+[ollama]
+version = "0.40.16"
+
+# OpenCode, license MIT. npm package opencode-ai (https://github.com/anomalyco/opencode),
+# version from `npm view opencode-ai version`.
+[optional.opencode]
+package = "opencode-ai"
+version = "1.19.6"
+
+# qmd, license MIT. npm package @tobilu/qmd (https://github.com/tobi/qmd),
+# version from `npm view @tobilu/qmd version`.
+# Memory: qmd runs three local GGUF models through node-llama-cpp (auto-downloaded on first
+# use into ~/.cache/qmd/models, the query expansion model alone is about 1.1 GB) and keeps
+# them loaded while it runs. It is heavy for a machine under memory pressure.
+[optional.qmd]
+package = "@tobilu/qmd"
+version = "2.9.0"
+
+# context7, license MIT. npm package @upstash/context7-mcp (https://github.com/upstash/context7),
+# version from `npm view @upstash/context7-mcp version`.
+# Key: an API key is recommended for higher rate limits, but the README does not make it required.
+[optional.context7]
+package = "@upstash/context7-mcp"
+version = "4.7.3"
+
+# ponytail, license MIT. Tag v5.3.3 of https://github.com/DietrichGebert/ponytail
+# (git ls-remote --tags; lightweight tag, so the tag object is the commit).
+[plugins.ponytail]
+repo = "https://github.com/DietrichGebert/ponytail"
+commit = "7801d061243d7b753bad0e0b3c057cd250b11755"
+
+# superpowers, license MIT. Tag v7.0.2 of https://github.com/obra/superpowers
+# (git ls-remote shows the peeled commit 22f0b463...).
+[plugins.superpowers]
+repo = "https://github.com/obra/superpowers"
+commit = "22f0b463e7a5e579904dd6211a520321035526f7"
