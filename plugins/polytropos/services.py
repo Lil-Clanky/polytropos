@@ -90,8 +90,11 @@ class ServiceManager:
             raise RuntimeError((result.stderr or result.stdout or "service command failed").strip())
 
     def start(self) -> None:
-        self._check(self._exec("launchctl", "kickstart", "-k", self._target) if self._mac
-                    else self._ctl("restart", SYSTEMD_UNIT))
+        if not self._mac:
+            return self._check(self._ctl("restart", SYSTEMD_UNIT))
+        if self._exec("launchctl", "print", self._target).returncode != 0:  # stop() unloads the job
+            self._check(self._exec("launchctl", "bootstrap", f"gui/{self._uid}", str(self.path())))
+        self._check(self._exec("launchctl", "kickstart", "-k", self._target))
 
     def stop(self) -> None:
         if self._mac:

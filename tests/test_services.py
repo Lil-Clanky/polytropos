@@ -54,8 +54,8 @@ def test_macos_install_start_stop_remove(tmp_path):
     mgr.start()
     assert mgr.is_running() is True
     mgr.remove()
-    assert run.calls == [["launchctl", "kickstart", "-k", target], ["launchctl", "print", target],
-                         ["launchctl", "bootout", target]]
+    assert run.calls == [["launchctl", "print", target], ["launchctl", "kickstart", "-k", target],
+                         ["launchctl", "print", target], ["launchctl", "bootout", target]]
     assert not plist.exists()
     assert ServiceManager(platform="darwin", run=Runner(stdout="state = waiting"), home=tmp_path, uid=1).is_running() is False
 
@@ -80,3 +80,19 @@ def test_linux_install_start_stop_remove(tmp_path):
                          ["systemctl", "--user", "daemon-reload"]]
     assert not unit.exists()
     assert ServiceManager(platform="linux", run=Runner(stdout="inactive\n"), home=tmp_path).is_running() is False
+
+
+def test_macos_start_reloads_a_stopped_job(tmp_path):
+    run = Runner()
+    mgr = ServiceManager(platform="darwin", run=run, home=tmp_path, uid=501)
+    run.stdout = ""
+    orig = run.__call__
+    run_calls = run.calls
+
+    def fake(argv, **kw):
+        res = orig(argv, **kw)
+        return SimpleNamespace(returncode=113 if argv[1] == "print" else 0, stdout="", stderr="")
+
+    mgr = ServiceManager(platform="darwin", run=fake, home=tmp_path, uid=501)
+    mgr.start()
+    assert [c[1] for c in run_calls] == ["print", "bootstrap", "kickstart"]
