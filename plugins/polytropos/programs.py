@@ -3,6 +3,7 @@
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -53,12 +54,13 @@ def _rtk(lock: dict, platform: str, machine: str) -> Program:
 
 
 def _ollama(lock: dict, platform: str) -> Program:
-    v = lock["ollama"]["version"]
+    o = lock["ollama"]
+    v = o["version"]
     if platform == "darwin":
-        # shortcut: the Homebrew formula cannot pin a version, so macOS gets whatever brew has.
-        cmd = ["brew", "install", "ollama"]
-    else:
-        cmd = ["sh", "-c", f"curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION={v} sh"]
+        url = f"https://github.com/ollama/ollama/releases/download/v{v}/ollama-darwin.tgz"
+        return Program("ollama", v, ["ollama", "--version"], [], optional=True,
+                       asset_url=url, asset_sha256=o["darwin_sha256"])
+    cmd = ["sh", "-c", f"curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION={v} sh"]
     return Program("ollama", v, ["ollama", "--version"], [cmd], optional=True)
 
 
@@ -116,15 +118,28 @@ def _download(url: str, dest: Path) -> None:
     urllib.request.urlretrieve(url, dest)  # noqa: S310 (https URL from versions.lock)
 
 
+def _fetch(p: Program, download: Callable[[str, Path], None], tmp: str) -> Path:
+    """Download the pinned archive into tmp and return it once its SHA-256 matches."""
+    archive = Path(tmp) / "asset.tgz"
+    download(p.asset_url, archive)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if digest != p.asset_sha256:
+        raise ValueError(f"SHA-256 mismatch for {p.asset_url}: expected {p.asset_sha256}, got {digest}")
+    return archive
+
+
+def _link(target: Path, link: Path) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    tmp = link.with_name(f".{link.name}.new")
+    tmp.unlink(missing_ok=True)
+    tmp.symlink_to(target)
+    os.replace(tmp, link)
+
+
 def _install_rtk(p: Program, download: Callable[[str, Path], None]) -> None:
     bin_dir = Path.home() / ".local" / "bin"
     with tempfile.TemporaryDirectory() as tmp:
-        archive = Path(tmp) / "rtk.tar.gz"
-        download(p.asset_url, archive)
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if digest != p.asset_sha256:
-            raise ValueError(f"SHA-256 mismatch for {p.asset_url}: expected {p.asset_sha256}, got {digest}")
-        with tarfile.open(archive) as tf:
+        with tarfile.open(_fetch(p, download, tmp)) as tf:
             member = next((m for m in tf.getmembers() if m.isfile() and Path(m.name).name == "rtk"), None)
             if member is None:
                 raise ValueError(f"no rtk binary in {p.asset_url}")
@@ -136,9 +151,44 @@ def _install_rtk(p: Program, download: Callable[[str, Path], None]) -> None:
         os.replace(staged, bin_dir / "rtk")
 
 
+def _install_ollama_tree(p: Program, download: Callable[[str, Path], None]) -> None:
+    """Unpack the whole archive (binary and libraries) and link the binary into ~/.local/bin."""
+    lib_root = Path.home() / ".local" / "lib" / "polytropos" / "ollama"
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(_fetch(p, download, tmp)) as tf:
+            members = tf.getmembers()
+            for m in members:
+                parts = Path(m.name).parts
+                if Path(m.name).is_absolute() or ".." in parts:
+                    raise ValueError(f"unsafe archive path: {m.name!r}")
+                if not (m.isdir() or m.isreg() or m.issym() or m.islnk()):
+                    raise ValueError(f"unsupported archive member: {m.name!r}")
+            if not any(m.isreg() and Path(m.name).parts[-1:] == ("ollama",) and len(Path(m.name).parts) <= 2
+                       for m in members):
+                raise ValueError(f"no ollama binary in {p.asset_url}")
+            lib_root.mkdir(parents=True, exist_ok=True)
+            staged = Path(tempfile.mkdtemp(dir=lib_root, prefix=".stage-"))
+            try:
+                tf.extractall(staged, filter="data")  # the data filter also rejects links that leave the tree
+                binary = staged / "ollama"
+                if not binary.is_file():
+                    binary = staged / "bin" / "ollama"
+                if not binary.is_file():
+                    raise ValueError(f"no ollama binary in {p.asset_url}")
+                rel = binary.relative_to(staged)
+                final = lib_root / p.version
+                shutil.rmtree(final, ignore_errors=True)
+                os.replace(staged, final)
+            except BaseException:
+                shutil.rmtree(staged, ignore_errors=True)
+                raise
+    _link(final / rel, Path.home() / ".local" / "bin" / "ollama")
+    print("Ollama is installed. Start it with `ollama serve`.")
+
+
 def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], None] | None = None) -> None:
     if p.asset_url:
-        _install_rtk(p, download or _download)
+        (_install_ollama_tree if p.name == "ollama" else _install_rtk)(p, download or _download)
     for cmd in p.install_cmds:
         if cmd[:3] == ["hermes", "mcp", "add"]:
             try:

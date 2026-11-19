@@ -47,18 +47,23 @@ package = "ast-grep-cli"
 version = "0.51.3"
 
 # stack-canary, license MIT (own repository).
-# The ref is the current main commit (git rev-parse main). The controller replaces it with
-# the commit of the release branch once Task 19 has landed.
+# The ref is the head of the branch feat/matrix-json-openai (b8490a9), which adds the
+# --summary-json and --openai-endpoint options Polytropos needs. The commit is on that branch
+# and not yet on stack-canary's main; the controller moves the pin once it is merged.
 [stack-canary]
 repo = "https://github.com/Lil-Clanky/stack-canary"
-ref = "e3e5bd68c43215a3698a74070924483f5a68f2ea"
+ref = "b8490a92414c45064317953ebd2c15afae930cb1"
 
 # Ollama, license MIT.
 # version: newest row of the published stack-canary matrix (MATRIX.md, identical in the publish
 # worktree and on the matrix branch) where llama3.2:3b passes every check (A1 to A6 and B6 on
 # Hermes v0.23.2): 0.40.16.
+# darwin_sha256: digest of the release asset ollama-darwin.tgz of v0.40.16, from
+# `gh release view v0.40.16 -R ollama/ollama --json assets` (the asset stack-canary tests).
+# macOS installs that asset; Linux runs the official install script at this version.
 [ollama]
 version = "0.40.16"
+darwin_sha256 = "a743717494315da7cd352982b805f6b992d4b4452ca117fd5fbf86c4ee46fca0"
 
 # OpenCode, license MIT. npm package opencode-ai (https://github.com/anomalyco/opencode),
 # version from `npm view opencode-ai version`.

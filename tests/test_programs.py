@@ -149,3 +149,54 @@ def test_ponytail_fallback_order(tmp_home):
     assert calls[0][:2] == ["git", "clone"] and calls[0][-1] == target
     assert calls[1] == ["git", "-C", target, "checkout", commit]
     assert calls[2] == ["hermes", "plugins", "enable", "ponytail"]
+
+
+def tar_ollama(extra=()):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, payload in (("ollama", b"BIN"), ("libggml.dylib", b"LIB"), *extra):
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            info.mode = 0o755
+            tf.addfile(info, io.BytesIO(payload))
+        link = tarfile.TarInfo("libggml.0.dylib")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "libggml.dylib"
+        tf.addfile(link)
+    return buf.getvalue()
+
+
+def darwin_ollama(data=None):
+    ol = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["ollama"]
+    assert ol.asset_url.endswith(f"/v{LOCK['ollama']['version']}/ollama-darwin.tgz")
+    assert len(ol.asset_sha256) == 64
+    return dataclasses.replace(ol, asset_sha256=hashlib.sha256(data).hexdigest()) if data else ol
+
+
+def test_macos_ollama_installs_lock_version_tree(tmp_home, capsys):
+    data = tar_ollama()
+    calls = []
+    P.install(darwin_ollama(data), lambda cmd, **k: calls.append(cmd) or proc(),
+              download=lambda url, dest: dest.write_bytes(data))
+    root = tmp_home / ".local" / "lib" / "polytropos" / "ollama" / LOCK["ollama"]["version"]
+    assert (root / "libggml.dylib").read_bytes() == b"LIB"
+    assert (root / "libggml.0.dylib").is_symlink()
+    link = tmp_home / ".local" / "bin" / "ollama"
+    assert link.is_symlink() and link.resolve() == (root / "ollama").resolve()
+    assert calls == []
+    assert "ollama serve" in capsys.readouterr().out
+
+
+def test_macos_ollama_sha_mismatch_leaves_nothing(tmp_home):
+    ol = darwin_ollama()
+    with pytest.raises(ValueError, match="SHA-256"):
+        P.install(ol, lambda *a, **k: proc(), download=lambda url, dest: dest.write_bytes(tar_ollama()))
+    assert not (tmp_home / ".local").exists()
+
+
+def test_macos_ollama_unsafe_member_leaves_nothing(tmp_home):
+    data = tar_ollama([("../evil", b"x")])
+    with pytest.raises(ValueError, match="unsafe"):
+        P.install(darwin_ollama(data), lambda *a, **k: proc(), download=lambda url, dest: dest.write_bytes(data))
+    assert not (tmp_home / ".local" / "bin").exists()
+    assert not (tmp_home / "evil").exists()
