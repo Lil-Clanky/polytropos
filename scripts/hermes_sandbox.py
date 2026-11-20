@@ -3,8 +3,11 @@
 A sandbox root holds ``hermes/`` (the HERMES_HOME), ``home/`` (the HOME) and ``work/`` (the
 working directory of a run). Runs start from a short allowlist of the parent environment, so
 API keys and Hermes settings of the machine never reach the sandboxed Hermes.
+
+``python scripts/hermes_sandbox.py build-root ROOT`` makes the root of the end-to-end tests.
 """
 
+import argparse
 import json
 import os
 import shutil
@@ -16,8 +19,10 @@ from pathlib import Path
 
 import yaml
 
+REPO = Path(__file__).resolve().parent.parent
 # Resolved at import: tests later point HOME at a temp folder.
 HERMES_BIN = Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "hermes"
+CLOSED = "127.0.0.1:9"  # a loopback port nothing listens on (the discard port)
 _KEEP_ENV = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "USER", "LOGNAME", "SHELL")
 
 
@@ -39,11 +44,13 @@ def make_home(root: Path, config: dict, plugins: list[Path]) -> Path:
 def sandbox_env(home: Path) -> dict[str, str]:
     """Environment for any Hermes command in the sandbox of *home*: the allowlisted parent
     variables plus ``HERMES_HOME=home``, ``HOME=<root>/home``, ``TMPDIR=<root>/tmp`` (Hermes
-    puts its frozen provider copies there) and no bytecode writes."""
+    puts its frozen provider copies there), no bytecode writes and ``OLLAMA_HOST`` on a closed
+    port, so neither Hermes nor a program it runs reaches the machine's Ollama."""
     env = {k: os.environ[k] for k in _KEEP_ENV if k in os.environ}
     tmp = home.parent / "tmp"
     tmp.mkdir(exist_ok=True)
-    env.update(HERMES_HOME=str(home), HOME=str(home.parent / "home"), TMPDIR=str(tmp), PYTHONDONTWRITEBYTECODE="1")
+    env.update(HERMES_HOME=str(home), HOME=str(home.parent / "home"), TMPDIR=str(tmp), PYTHONDONTWRITEBYTECODE="1",
+               OLLAMA_HOST=CLOSED)
     return env
 
 
@@ -108,3 +115,45 @@ def launch_snapshot() -> set[str]:
     agents = Path.home() / "Library" / "LaunchAgents"
     files = {p.name for p in agents.iterdir()} if agents.is_dir() else set()
     return {label for label in labels if "hermes" in label.lower() or "polytropos" in label.lower()} | files
+
+
+def router_home(root: Path, router: dict) -> Path:
+    """``make_home`` with both Polytropos plugins, the router as the default model with *router* as
+    its ``plugins.entries.polytropos-router`` entry, and a fake router key in ``.env``: Hermes
+    refuses a provider whose key is missing."""
+    home = make_home(root, {
+        "model": {"provider": "polytropos-router", "default": "auto"},
+        "plugins": {"enabled": ["polytropos"], "entries": {
+            "polytropos-router": router,
+            "polytropos": {"settings": {"awake": False}},  # no sleep hold that a stopped daemon could leave running
+        }},
+        "updates": {"check": False},  # no passive update check, which asks GitHub with git ls-remote
+    }, [REPO / "plugins" / "polytropos_router", REPO / "plugins" / "polytropos"])
+    (home / ".env").write_text("FREELLMAPI_API_KEY=sandbox-fake-key\n")
+    return home
+
+
+def build_root(root: Path) -> int:
+    """Make the end-to-end root and run one router turn in it against a fake server. The first run in
+    a fresh root prepares Hermes's runtime for it (about 850 MB: Hermes installs its Python packages
+    there with uv, and fetches the plugin catalog and models.dev), so the tests reuse the root.
+    Returns 0 only when the turn succeeded and its request reached the fake."""
+    from fake_openai import FakeOpenAI  # tests/fake_openai.py, on sys.path in the tests and from __main__
+
+    with FakeOpenAI() as fake:
+        home = router_home(root, {"upstreams": {"fake": {"base_url": fake.base_url}},
+                                  "routes": {"complex": ["fake/model"]}, "classifier": None})
+        result = run_oneshot(home, "Say hi.", provider="polytropos-router", model="auto", timeout_s=1800)
+    print(result.stdout, end="")
+    print(result.stderr, end="", file=sys.stderr)
+    for request in fake.requests:
+        print(f"fake server: POST {request['_path']} model={request.get('model')}")
+    return result.returncode or (0 if fake.requests else 1)
+
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO / "tests"))
+    parser = argparse.ArgumentParser()
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("build-root", help="make the end-to-end root and run its first turn").add_argument("root", type=Path)
+    sys.exit(build_root(parser.parse_args().root.resolve()))

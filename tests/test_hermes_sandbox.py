@@ -3,6 +3,7 @@ import os
 import signal
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -55,6 +56,7 @@ def test_run_oneshot_isolates_the_run(tmp_path, monkeypatch):
     assert kw["env"]["HOME"] == str(tmp_path / "home")
     assert kw["env"]["TMPDIR"] == str(tmp_path / "tmp") and (tmp_path / "tmp").is_dir()
     assert kw["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert kw["env"]["OLLAMA_HOST"] == hermes_sandbox.CLOSED
     assert "SOME_API_KEY" not in kw["env"]
     assert kw["cwd"] == tmp_path / "work" and kw["cwd"].is_dir()
     assert kw["timeout"] == 5 and kw["stdin"] == subprocess.DEVNULL
@@ -161,6 +163,36 @@ def test_run_oneshot_stops_the_daemon_before_and_after(tmp_path, monkeypatch):
         earlier.wait()
         if started and not _gone(started):
             os.kill(started, signal.SIGKILL)
+
+
+def _router_turn(seen: dict, *, call_fake: bool):
+    """A stand-in for run_oneshot: records what the run would see and, like the router, can call the upstream."""
+    def turn(home, prompt, *, provider, model, timeout_s):
+        entry = yaml.safe_load((home / "config.yaml").read_text())["plugins"]["entries"]["polytropos-router"]
+        if call_fake:
+            url = entry["upstreams"]["fake"]["base_url"] + "/chat/completions"
+            urllib.request.urlopen(urllib.request.Request(url, data=b'{"model": "model"}'), timeout=5).read()
+        seen.update(home=home, provider=provider, model=model, env=(home / ".env").read_text(),
+                    plugins=sorted(p.name for p in (home / "plugins").iterdir()))
+        return subprocess.CompletedProcess([], 0, stdout="hi\n", stderr="")
+    return turn
+
+
+def test_build_root_runs_one_router_turn_against_a_fake(tmp_path, monkeypatch, capsys):
+    seen = {}
+    monkeypatch.setattr(hermes_sandbox, "run_oneshot", _router_turn(seen, call_fake=True))
+
+    assert hermes_sandbox.build_root(tmp_path / "e2e") == 0
+
+    assert seen == {"home": tmp_path / "e2e" / "hermes", "provider": "polytropos-router", "model": "auto",
+                    "env": "FREELLMAPI_API_KEY=sandbox-fake-key\n", "plugins": ["polytropos", "polytropos_router"]}
+    assert "POST /v1/chat/completions model=model" in capsys.readouterr().out
+
+
+def test_build_root_fails_when_no_request_reached_the_fake(tmp_path, monkeypatch):
+    monkeypatch.setattr(hermes_sandbox, "run_oneshot", _router_turn({}, call_fake=False))
+
+    assert hermes_sandbox.build_root(tmp_path / "e2e") == 1
 
 
 def test_launch_snapshot_empty_off_macos(monkeypatch):
