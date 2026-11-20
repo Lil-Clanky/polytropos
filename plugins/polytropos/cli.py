@@ -195,9 +195,13 @@ def _setup(args, fx: Effects) -> int:
     if state.shared.get("freellmapi", {}).get("mode") == "external":
         url = re.sub(r"/v1$", "", (_answer(fx, f"FreeLLMAPI URL [{url}]: ") or url).rstrip("/"))
         command += ["--url", url]
+    model = _get(_read_config(home), "model")  # setup-hermes rewrites this block, the user's own key included
     if fx.run(command, check=False).returncode != 0:
         print("FreeLLMAPI's setup-hermes failed, so the router settings were not written.")
         return 1
+    if (written := _get(_read_config(home), "model")) != model:  # before the keys below: uninstall restores it last
+        record_config_change(state, str(home), "model", model, written)
+        save_state(state)
     # In this order every step leaves a router config that parses.
     changes = [(ROUTER_KEY + "routes.complex", ["freellmapi/auto"]),
                (ROUTER_KEY + "routes.simple", ["freellmapi/auto"]),
@@ -266,7 +270,8 @@ def _snapshot(target: Path | str, home: Path):
 def _record_integrations(state: State, profile: str, changed: list[tuple[list[str], Path | str, object]]) -> None:
     for command, target, old in changed:
         if isinstance(target, str):  # an MCP server entry, undone with the other config changes
-            record_config_change(state, profile, target, old, _snapshot(target, Path(profile)))
+            if old is None:  # an entry that was there before stays the user's, and its value (keys too) unrecorded
+                record_config_change(state, profile, target, None, _snapshot(target, Path(profile)))
             continue
         items = state.profiles.setdefault(profile, {}).setdefault("integrations", [])
         if {"ran": command, "added": str(target)} not in items:
@@ -511,10 +516,12 @@ def _remove_program(p: programs.Program, fx: Effects) -> None:
 def _undo_integration(item: dict, home: Path, fx: Effects) -> bool:
     """Undo one recorded integration of this profile. False keeps the record, so the next uninstall tries again."""
     ran, added = item["ran"], Path(item["added"])
-    if ran[-1:] == ["setup-opencode"]:  # no safe undo: it merged its entries into the user's own OpenCode config
+    if ran[-1:] == ["setup-opencode"]:  # no safe undo: it merged its entries into the user's own OpenCode files
+        data_home = os.environ.get("XDG_DATA_HOME", "").strip() or Path.home() / ".local" / "share"
         print(f"FreeLLMAPI's setup-opencode added the freellmapi provider to {added} and set a freellmapi model as "
-              "OpenCode's default. If OpenCode should stop using FreeLLMAPI, remove that provider and change the "
-              "model there by hand.")
+              f"OpenCode's default, and it stored FreeLLMAPI's key under freellmapi in "
+              f"{Path(data_home) / 'opencode' / 'auth.json'}. If OpenCode should stop using FreeLLMAPI, remove that "
+              "provider and that entry and change the model there by hand.")
         return True
     if ran[:3] == ["hermes", "skills", "install"]:
         command = ["hermes", "skills", "uninstall", added.name, "--yes"]
@@ -552,10 +559,16 @@ def _uninstall(args, fx: Effects) -> int:
             continue
         command = ["hermes", "config", "unset", key] if old is None else ["hermes", "config", "set", key, _value(old)]
         if fx.run(command, check=False).returncode != 0:
-            print(f"Restoring {key} failed. Run this command yourself: {shlex.join(command)}")
+            if isinstance(old, dict):  # a block such as model can hold an API key, which no output may show
+                print(f"Restoring {key} failed. Its old value stays recorded in {paths.state_dir() / 'state.json'}, "
+                      "and the next hermes polytropos uninstall tries again.")
+            else:
+                print(f"Restoring {key} failed. Run this command yourself: {shlex.join(command)}")
             kept.insert(0, change)
+            failed += 1
     record = state.profiles.setdefault(profile, {})
     left = [item for item in record.get("integrations", []) if not _undo_integration(item, home, fx)]
+    failed += len(left)
     record.update(config_changes=kept, integrations=left)
     state.profiles[profile] = {key: value for key, value in record.items() if value}
     if not state.profiles[profile]:

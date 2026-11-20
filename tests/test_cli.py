@@ -401,6 +401,7 @@ def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     set_mode(state, "freellmapi", "managed")
     use_shared(state, "qmd", profile, version=LOCK["optional"]["qmd"]["version"], installed_by_us=True)
     use_shared(state, "graphify", profile, version=LOCK["graphify"]["version"], installed_by_us=False)
+    record_config_change(state, profile, "model", USER_MODEL, FREELLM_MODEL)
     record_config_change(state, profile, R + "routes.simple", None, ["freellmapi/auto"])
     record_config_change(state, profile, "model.base_url", "http://localhost:3001/v1", None)
     record_config_change(state, profile, "model.provider", "custom", "polytropos-router")
@@ -417,7 +418,8 @@ def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     cmds = run.commands()
     assert cmds.index(["hermes", "config", "set", "model.provider", "custom"]) < cmds.index(
         ["hermes", "config", "set", "model.base_url", "http://localhost:3001/v1"]) < cmds.index(
-        ["hermes", "config", "unset", R + "routes.simple"])
+        ["hermes", "config", "unset", R + "routes.simple"]) < cmds.index(
+        ["hermes", "config", "set", "model", json.dumps(USER_MODEL)])  # the user's own block comes back last
     assert ["npm", "uninstall", "-g", LOCK["optional"]["qmd"]["package"]] in cmds
     assert not any(c[:2] == ["uv", "tool"] for c in cmds)
     after = load_state()
@@ -472,7 +474,7 @@ def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(t
         {"ran": ["graphify", "install", "--platform", "hermes"], "added": str(graphify)}, qmd]}
     save_state(state)
     run = FakeRun(fail=[("hermes", "skills", "uninstall")])
-    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 1  # the qmd undo failed
     assert run.commands() == [[*rtk, "--uninstall"], ["hermes", "skills", "uninstall", "qmd", "--yes"]]
     out = capsys.readouterr().out
     assert graphify.is_dir() and f"added {graphify}, which is outside this profile" in out
@@ -504,23 +506,67 @@ def test_uninstall_prints_a_note_for_a_recorded_setup_opencode_and_runs_nothing(
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
     assert run.commands() == []
     out = capsys.readouterr().out
+    auth = tmp_home / ".local" / "share" / "opencode" / "auth.json"  # $XDG_DATA_HOME, as setup-opencode reads it
     assert f"setup-opencode added the freellmapi provider to {opencode_json}" in out
-    assert "remove that provider and change the model there by hand" in out
+    assert f"stored FreeLLMAPI's key under freellmapi in {auth}" in out
+    assert "remove that provider and that entry and change the model there by hand" in out
     assert str(home) not in load_state().profiles
+
+
+def test_uninstall_exits_1_and_keeps_the_record_when_a_restore_fails(tmp_home, capsys):
+    home = tmp_home / ".hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text(yaml.safe_dump({"model": {"provider": "polytropos-router", "default": "auto"}}))
+    state = State()
+    record_config_change(state, str(home), "model", USER_MODEL, FREELLM_MODEL)
+    record_config_change(state, str(home), "model.default", "free-model", "auto")
+    save_state(state)
+    run = FakeRun(fail=[("hermes", "config", "set", "model")])
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 1
+    assert run.commands()[-1] == ["hermes", "config", "set", "model", json.dumps(USER_MODEL)]
+    out = capsys.readouterr().out
+    assert "Restoring model failed" in out and USER_MODEL["api_key"] not in out  # a model block can hold a key
+    assert config_changes(load_state(), str(home)) == [{"key": "model", "old": USER_MODEL, "new": FREELLM_MODEL}]
+
+
+def test_install_leaves_an_mcp_entry_that_was_there_before_unrecorded(tmp_home):
+    home = tmp_home / ".hermes"
+    home.mkdir()
+    mine = {"command": "my-context7", "env": {"CONTEXT7_API_KEY": "ctx7-test-secret"}}
+    (home / "config.yaml").write_text(yaml.safe_dump({"mcp_servers": {"context7": mine}}))
+
+    def mcp_added(argv):
+        (home / "config.yaml").write_text(yaml.safe_dump({"mcp_servers": {argv[3]: {"command": argv[5]}}}))
+
+    run = FakeRun(on={("hermes", "mcp", "add"): mcp_added})
+    assert cli.handle(parse("install", "--only", "context7"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert "config_changes" not in load_state().profiles.get(str(home), {})
 
 
 # --- setup ---
 
 UPSTREAM = {"base_url": "http://127.0.0.1:3001/v1", "api_key_env": "FREELLMAPI_API_KEY"}
+USER_MODEL = {"provider": "openrouter", "default": "some/model", "api_key": "sk-user-test-key"}
+# What FreeLLMAPI's setup-hermes leaves in the model block (~/freellmapi/cli/src/tools.ts, function hermes).
+FREELLM_MODEL = {"provider": "custom", "default": "free-model", "base_url": "http://127.0.0.1:3001/v1",
+                 "api_key": "${FREELLMAPI_API_KEY}", "api_mode": "chat_completions", "context_length": 131072,
+                 "default_headers": {"User-Agent": "hermes-agent"}}
 
 
-def test_setup_records_config_changes_with_old_values(tmp_home):
+def setup_hermes_rewrites_model(home):
+    def effect(argv):
+        config = yaml.safe_load((home / "config.yaml").read_text())
+        config["model"] = FREELLM_MODEL
+        (home / "config.yaml").write_text(yaml.safe_dump(config))
+    return effect
+
+
+def test_setup_records_the_users_model_before_setup_hermes_rewrites_it(tmp_home):
     home = tmp_home / ".hermes"
     home.mkdir()
     (home / "config.yaml").write_text(yaml.safe_dump({
-        "model": {"provider": "custom", "default": "free-model", "base_url": "http://localhost:3001/v1"},
-        "plugins": {"entries": {"polytropos-router": {"routes": {"simple": ["old/model"]}}}}}))
-    run, asked = FakeRun(), []
+        "model": USER_MODEL, "plugins": {"entries": {"polytropos-router": {"routes": {"simple": ["old/model"]}}}}}))
+    run, asked = FakeRun(on={("npx",): setup_hermes_rewrites_model(home)}), []
     assert cli.handle(parse("setup"), cli.Effects(run=run, ask=lambda q: asked.append(q) or "y")) == 0
     cmds = run.commands()
     assert cmds[0] == ["npx", f"freellmapi@{LOCK['freellmapi']['cli_version']}", "setup-hermes"]
@@ -530,14 +576,20 @@ def test_setup_records_config_changes_with_old_values(tmp_home):
         ["model.provider", "polytropos-router"], ["model.default", "auto"]]
     assert all(c[:3] == ["hermes", "config", "set"] for c in cmds[1:])
     assert config_changes(load_state(), str(home)) == [
+        {"key": "model", "old": USER_MODEL, "new": FREELLM_MODEL},
         {"key": R + "routes.complex", "old": None, "new": ["freellmapi/auto"]},
         {"key": R + "routes.simple", "old": ["old/model"], "new": ["freellmapi/auto"]},
         {"key": R + "classifier", "old": None, "new": "freellmapi/auto"},
         {"key": R + "upstreams.freellmapi", "old": None, "new": UPSTREAM},
-        {"key": "model.base_url", "old": "http://localhost:3001/v1", "new": None},
+        {"key": "model.base_url", "old": FREELLM_MODEL["base_url"], "new": None},
+        {"key": "model.api_mode", "old": "chat_completions", "new": None},
         {"key": "model.provider", "old": "custom", "new": "polytropos-router"},
         {"key": "model.default", "old": "free-model", "new": "auto"}]
     assert len(asked) == 1 and "default model" in asked[0]
+    run = FakeRun()  # the fake config set changed nothing, so only the model block differs from its old value
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    [restore] = run.commands()
+    assert restore[:4] == ["hermes", "config", "set", "model"] and json.loads(restore[4]) == USER_MODEL
 
 
 def test_setup_stops_at_a_failed_key_and_keeps_what_it_recorded(tmp_home, capsys):
