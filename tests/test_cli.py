@@ -255,6 +255,16 @@ def test_install_rejects_unknown_names(tmp_home, capsys):
     assert "nope" in capsys.readouterr().out and run.calls == []
 
 
+def test_adopt_reads_the_checkout_from_from_path(tmp_home, capsys):
+    checkout = tmp_home / "checkout"
+    args = parse("adopt", "--from", str(checkout))
+    assert args.from_path == checkout and not hasattr(args, "source")  # Hermes's own --source has that destination
+    adopted = []
+    assert cli.handle(args, cli.Effects(freellm=SimpleNamespace(adopt=lambda src, pin: adopted.append(src)))) == 0
+    assert adopted == [checkout] and load_state().shared["freellmapi"]["mode"] == "managed"
+    assert f"with the data from {checkout}." in capsys.readouterr().out
+
+
 # --- update ---
 
 def pack_text(router_ref=SHA_NEW):
@@ -487,6 +497,30 @@ def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     assert after.shared == {} and config_changes(after, profile) == []
     out = capsys.readouterr().out
     assert "hermes plugins remove polytropos" in out and str(root / "data") in out
+
+
+def test_purge_data_waits_for_the_last_profile_and_a_typed_yes(tmp_home, monkeypatch, capsys):
+    first, second = tmp_home / ".hermes", tmp_home / ".hermes" / "profiles" / "work"
+    state = State()
+    for profile in (first, second):
+        use_shared(state, "freellmapi", str(profile), version="v0.16.36", installed_by_us=True)
+    set_mode(state, "freellmapi", "managed")
+    save_state(state)
+    root = paths.data_dir() / "freellmapi"
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "freeapi.db").write_text("db")
+    assert cli.handle(parse("uninstall", "--purge-data"), cli.Effects(run=FakeRun(), ask=no_questions)) == 0
+    assert f"FreeLLMAPI is still in use or was not removed, so {root} stays." in capsys.readouterr().out
+    assert (root / "data" / "freeapi.db").read_text() == "db"
+    monkeypatch.setenv("HERMES_HOME", str(second))
+    asked = []
+    fx = cli.Effects(run=FakeRun(), ask=lambda q: asked.append(q) or "y")  # only the typed word yes deletes
+    assert cli.handle(parse("uninstall", "--purge-data"), fx) == 0
+    assert (root / "data" / "freeapi.db").read_text() == "db" and "Nothing was deleted." in capsys.readouterr().out
+    assert asked == [f"Type yes to delete {root} with FreeLLMAPI's database, keys and backups: "]
+    fx.ask = lambda q: "yes"
+    assert cli.handle(parse("uninstall", "--purge-data"), fx) == 0
+    assert not root.exists() and f"Deleted {root}." in capsys.readouterr().out
 
 
 def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home):

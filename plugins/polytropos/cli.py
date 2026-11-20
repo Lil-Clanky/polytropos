@@ -405,14 +405,14 @@ def _adopt(args, fx: Effects) -> int:
         return 1
     pin = _pin(lock)
     try:
-        fx.fl().adopt(args.source.expanduser(), pin)
+        fx.fl().adopt(args.from_path.expanduser(), pin)
     except Exception as err:  # port, data, node, build or service errors
         print(f"FreeLLMAPI was not adopted: {err}")
         return 1
     state = load_state()
     _own_freellmapi(state, str(hermes_home()), pin.tag)
     save_state(state)
-    print(f"FreeLLMAPI {pin.tag} now runs as the Polytropos service with the data from {args.source}.")
+    print(f"FreeLLMAPI {pin.tag} now runs as the Polytropos service with the data from {args.from_path}.")
     return 0
 
 
@@ -753,7 +753,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     p.add_argument("--all-optional", action="store_true", help="also install every optional program")
     p.add_argument("--only", nargs="+", metavar="NAME", help="install only these parts")
     p = sub.add_parser("adopt", help="run an existing FreeLLMAPI checkout as the Polytropos service")
-    p.add_argument("--from", dest="source", type=Path, required=True, metavar="PATH",
+    p.add_argument("--from", dest="from_path", type=Path, required=True, metavar="PATH",  # Hermes's --source uses "source"
                    help="the FreeLLMAPI checkout whose data to take over")
     p = sub.add_parser("update", help="update to the latest Polytropos release")
     p.add_argument("component", nargs="?", choices=("freellmapi", "programs", "all"), default="all")
