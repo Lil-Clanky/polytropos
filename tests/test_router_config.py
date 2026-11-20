@@ -202,3 +202,15 @@ def test_classifier_can_be_turned_off(off):
     assert parse_config({**SPEC, "classifier": off}).classifier is None
     assert parse_config({"classifier": off}).classifier is None
     assert parse_config({}).classifier == DEFAULT_CONFIG.classifier
+
+
+@pytest.mark.parametrize("section", [
+    {"routes": {"simple": ["sk-live-ROUTE999"], "complex": ["freellmapi/auto"]}},
+    {"routes": {"simple": ["sk-live-ROUTE999/x"], "complex": ["freellmapi/auto"]}},
+    {"default_route": "sk-live-ROUTE999"},
+    {"channel_hints": {"whatsapp": "sk-live-ROUTE999"}},
+])
+def test_errors_name_the_position_only(section):
+    with pytest.raises(ConfigError) as e:
+        parse_config({**SPEC, **section})
+    assert "ROUTE999" not in str(e.value)

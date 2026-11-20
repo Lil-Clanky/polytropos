@@ -190,7 +190,7 @@ def test_router_ok_with_defaults(ctx):
 def test_router_broken_config_shows_the_errors(ctx):
     write_config(ctx, "plugins:\n  entries:\n    polytropos-router:\n      default_route: nowhere\n")
     r = d.check_router(ctx)[0]
-    assert r.status == "fail" and "no route named" in r.detail
+    assert r.status == "fail" and "default_route: no route has that name" in r.detail
 
 
 def test_router_window_and_unanswered_upstream(ctx):

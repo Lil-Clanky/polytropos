@@ -92,6 +92,19 @@ def test_classify_parses_reply(fake_openai):
     assert first["max_tokens"] == 16 and first["temperature"] == 0
 
 
+def test_classify_sends_at_most_2000_characters():
+    sent = []
+
+    def create(**kw):
+        sent.append(kw["messages"][1]["content"])
+        raise RuntimeError
+
+    long = "a" * 1000 + "middle" + "z" * 1000
+    classify(create, Slot("u", "c"), long, max_tokens=16, timeout_s=5)
+    classify(create, Slot("u", "c"), "x" * 2000, max_tokens=16, timeout_s=5)
+    assert sent == ["a" * 1000 + "\n" + "z" * 1000, "x" * 2000]
+
+
 def test_cache_thread_safety():
     cache = DecisionCache(max_entries=256)
     errors = []

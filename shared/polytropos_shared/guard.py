@@ -1,7 +1,9 @@
 """Memory guard: host signals, a verdict, Ollama helpers and a watchdog."""
 
+import functools
 import http.client
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -13,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 GB = 1024**3
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -193,16 +196,35 @@ def total_ram_bytes(*, platform: str = sys.platform, run=subprocess.run, read_te
     return kb * 1024 if kb is not None else None
 
 
+def _tagged(name) -> str | None:
+    """Ollama reads a name without a tag as <name>:latest."""
+    if not isinstance(name, str):
+        return None
+    return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
+
+
+def _listed(model: str, models: list[dict]) -> dict | None:
+    return next((m for m in models if _tagged(model) in (_tagged(m.get("name")), _tagged(m.get("model")))), None)
+
+
+@functools.cache  # once per process and model, the fit check runs on every request
+def _warn_not_pulled(model: str) -> None:
+    logger.warning("polytropos: the Ollama model %s is not pulled; the fit check refuses it", model)
+
+
 def ollama_fit(base_url: str, model: str, context: int, *, total_ram: int | None, timeout: float = 2.0) -> bool | None:
     if total_ram is None:
         return None
     root = ollama_root(base_url)
     try:
         loaded = _models(_call(f"{root}/api/ps", None, timeout))
-        if any(model in (m.get("name"), m.get("model")) for m in loaded):
+        if _listed(model, loaded):
             return True
-        tags = _models(_call(f"{root}/api/tags", None, timeout))
-        size = next((_size(m) for m in tags if model in (m.get("name"), m.get("model"))), None)
+        listed = _listed(model, _models(_call(f"{root}/api/tags", None, timeout)))
+        if listed is None:
+            _warn_not_pulled(model)
+            return False
+        size = _size(listed)
         info = _call(f"{root}/api/show", {"model": model}, timeout).get("model_info", {})
         kv = kv_cache_bytes(info, context)
         if size is None or kv is None:

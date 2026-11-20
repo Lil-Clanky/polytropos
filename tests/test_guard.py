@@ -193,9 +193,27 @@ def test_ollama_fit_against_fake():
         assert guard.ollama_fit(fake.url + "/v1", "small:3b", 8192, total_ram=ram) is True
         assert guard.ollama_fit(fake.url, "big:70b", 8192, total_ram=ram) is False
         assert guard.ollama_fit(fake.url, "small:3b", 8192, total_ram=None) is None
-        assert guard.ollama_fit(fake.url, "unknown", 8192, total_ram=ram) is None
+        assert guard.ollama_fit(fake.url, "unknown", 8192, total_ram=ram) is False
         routes[("POST", "/api/show")] = (500, {})
         assert guard.ollama_fit(fake.url, "small:3b", 8192, total_ram=ram) is None
+
+
+def test_ollama_fit_reads_a_bare_name_as_latest_and_refuses_an_unpulled_model(caplog):
+    info = {"llama.block_count": 28, "llama.attention.head_count_kv": 8, "llama.embedding_length": 3072, "llama.attention.head_count": 24}
+    routes = {
+        ("GET", "/api/ps"): (200, {"models": [{"name": "loaded:latest", "size": 10**9}]}),
+        ("GET", "/api/tags"): (200, {"models": [{"name": "small:latest", "size": 2 * 10**9}]}),
+        ("POST", "/api/show"): (200, {"model_info": info}),
+    }
+    with Fake(routes) as fake:
+        ram = 16 * GB
+        assert guard.ollama_fit(fake.url, "loaded", 8192, total_ram=ram) is True
+        assert guard.ollama_fit(fake.url, "small", 8192, total_ram=ram) is True
+        with caplog.at_level("WARNING"):
+            assert guard.ollama_fit(fake.url, "notpulled", 8192, total_ram=ram) is False
+        assert "notpulled is not pulled" in caplog.text
+        del routes[("GET", "/api/tags")]  # /api/tags cannot be read: no verdict, as before
+        assert guard.ollama_fit(fake.url, "notpulled", 8192, total_ram=ram) is None
 
 
 def test_macos_pressure_level_3_is_warning_and_5_critical():
@@ -220,7 +238,7 @@ def test_null_models_and_sizes_degrade():
         routes[("GET", "/api/tags")] = (200, {"models": [{"name": "m", "size": GB}]})
         assert guard.ollama_fit(fake.url, "m", 8192, total_ram=ram) is True
     with Fake({("GET", "/api/ps"): (200, {"models": None}), ("GET", "/api/tags"): (200, {"models": None})}) as fake:
-        assert guard.ollama_fit(fake.url, "m", 8192, total_ram=ram) is None
+        assert guard.ollama_fit(fake.url, "m", 8192, total_ram=ram) is False
 
 
 def test_http_exception_degrades(monkeypatch):

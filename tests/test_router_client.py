@@ -264,6 +264,37 @@ def test_watchdog_trip_aborts_local_and_falls_back(local, cloud, monkeypatch):
     assert made.count(local.base_url) == 2  # the tripped client was dropped
 
 
+def test_watchdog_trip_during_a_local_stream(local, cloud, monkeypatch):
+    monkeypatch.setattr(client_mod, "WATCHDOG_INTERVAL_S", 0.05)
+    cloud.script(CLS, SIMPLE, SIMPLE)
+    cloud.script("auto", {"content": "from cloud"})
+    # the fake waits a second before the headers and before each text chunk
+    local.script(MODEL, {"content": "too slow", "delay": 1}, {"content": "never read", "delay": 1})
+    hot = []
+    rc = router(local, cloud, guard_read=lambda: CRITICAL if hot else NORMAL)
+
+    def unloads():
+        return [(r["model"], r["keep_alive"]) for r in local.requests if r["_path"] == "/api/generate"]
+
+    # text has reached the caller: the trip stops the stream, and the error reaches the caller without a retry
+    stream = rc.chat.completions.create(model="auto", messages=turn("one"), stream=True)
+    seen = []
+    with pytest.raises(openai.APIConnectionError):
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                seen.append(chunk.choices[0].delta.content)
+                hot.append(True)
+    assert seen == ["too"] and not stream.retried and acted(cloud) == []
+    assert unloads() == [(MODEL, 0)]
+
+    # no text yet: the trip stops the stream and the router retries on the next model
+    hot.clear()
+    stream = rc.chat.completions.create(model="auto", messages=turn("two"), stream=True)
+    hot.append(True)  # the stream has started; its first text chunk is a second away
+    assert text_of(stream) == "from cloud" and stream.retried
+    assert acted(cloud) == ["auto"] and unloads() == [(MODEL, 0), (MODEL, 0)]
+
+
 def test_fit_refusal_skips_local(local, cloud):
     cloud.script(CLS, SIMPLE, SIMPLE)
     verdicts, seen = [False, None], []

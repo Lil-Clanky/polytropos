@@ -18,6 +18,8 @@ CLASSIFIER_PROMPT = (
 
 def classify(create: Callable[..., Any], slot: Slot, user_text: str, *,
              max_tokens: int, timeout_s: float) -> str | None:
+    if len(user_text) > 2000:  # the classifier sees the start and the end of a long message
+        user_text = user_text[:1000] + "\n" + user_text[-1000:]
     try:
         reply = create(
             model=slot.model,

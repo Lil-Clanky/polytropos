@@ -54,7 +54,7 @@ class ConfigError(ValueError):
 def parse_slot(text: str) -> Slot:
     upstream, sep, model = str(text).partition("/")
     if not (sep and upstream and model):
-        raise ValueError(f"expected 'upstream/model', got {text!r}")
+        raise ValueError("expected 'upstream/model'")
     return Slot(upstream, model)
 
 
@@ -66,7 +66,7 @@ def _slot(text, path: str, upstreams: dict) -> Slot:
     except ValueError as e:
         raise ConfigError(f"{path}: {e}") from None
     if slot.upstream not in upstreams:
-        raise ConfigError(f"{path}: unknown upstream {slot.upstream!r}")
+        raise ConfigError(f"{path}: unknown upstream")
     return slot
 
 
@@ -129,11 +129,11 @@ def parse_config(raw: dict) -> RouterConfig:
         routes[tier] = tuple(_slot(s, f"routes.{tier}[{i}]", upstreams) for i, s in enumerate(slots))
     default_route = _typed(raw.get("default_route", "complex"), str, "default_route")
     if default_route not in routes:
-        raise ConfigError(f"default_route: no route named {default_route!r}")
+        raise ConfigError("default_route: no route has that name")
     hints = _mapping(raw.get("channel_hints") or {}, "channel_hints")
     for platform, tier in hints.items():
         if _typed(tier, str, f"channel_hints.{platform}") not in routes:
-            raise ConfigError(f"channel_hints.{platform}: no route named {tier!r}")
+            raise ConfigError(f"channel_hints.{platform}: no route has that name")
     classifier, max_tokens, timeout_s = _classifier(raw.get("classifier", _ABSENT), upstreams, use_defaults)
     return RouterConfig(
         upstreams=upstreams,
