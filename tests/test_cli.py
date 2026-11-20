@@ -35,9 +35,14 @@ def no_questions(question):
     pytest.fail(f"unexpected question: {question}")
 
 
+def probe(argv):
+    """`<name> --version`, or stack-canary's `canary run --help`, which stands in for a version flag."""
+    return argv[1:] in (["--version"], ["run", "--help"])
+
+
 class FakeRun:
-    """Records argv. `<name> --version` prints versions[name] or raises FileNotFoundError. A command
-    that starts with a prefix in `fail` exits 1; `on` maps a prefix to a side effect."""
+    """Records argv. A probe prints versions[name] (the name without its folder) or raises FileNotFoundError.
+    A command that starts with a prefix in `fail` exits 1; `on` maps a prefix to a side effect."""
 
     def __init__(self, versions=None, fail=(), on=None):
         self.versions, self.fail, self.on, self.calls = versions or {}, fail, on or {}, []
@@ -45,10 +50,11 @@ class FakeRun:
     def __call__(self, argv, **kw):
         argv = [str(a) for a in argv]
         self.calls.append(argv)
-        if argv[1:] == ["--version"]:
-            if argv[0] not in self.versions:
+        if probe(argv):
+            name = Path(argv[0]).name
+            if name not in self.versions:
                 raise FileNotFoundError(argv[0])
-            return SimpleNamespace(returncode=0, stdout=f"{argv[0]} {self.versions[argv[0]]}\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout=f"{name} {self.versions[name]}\n", stderr="")
         for prefix, effect in self.on.items():
             if argv[:len(prefix)] == list(prefix):
                 effect(argv)
@@ -58,7 +64,7 @@ class FakeRun:
         return SimpleNamespace(returncode=code, stdout="", stderr="")
 
     def commands(self):
-        return [c for c in self.calls if c[1:] != ["--version"]]
+        return [c for c in self.calls if not probe(c)]
 
 
 class FakeCtx:
@@ -182,11 +188,13 @@ def test_doctor_checks_plugins_in_an_installed_home_without_a_pack_file(tmp_home
     assert "ok    plugins: polytropos, ponytail, superpowers" in out
     assert "warn  plugin polytropos-router is at aaaaaaa, the pack pins bbbbbbb" in out
     assert "pack file" not in out
-    (home / "plugins" / ".install-metadata.json").write_text("{}")  # as in a run from a checkout
-    assert cli.handle(parse("doctor"), cli.Effects(run=FakeRun(), ask=no_questions)) == 1
-    out = capsys.readouterr().out
-    assert "fail  plugin Lil-Clanky/polytropos#plugins/polytropos is not installed\n        hermes polytropos update" in out
-    assert "fail  plugin Lil-Clanky/polytropos#plugins/polytropos_router is not installed" in out
+    for kept in ({}, {"polytropos-router": meta["polytropos-router"]}):  # as in a run from a checkout
+        (home / "plugins" / ".install-metadata.json").write_text(json.dumps(kept))
+        assert cli.handle(parse("doctor"), cli.Effects(run=FakeRun(), ask=no_questions)) == 1
+        out = capsys.readouterr().out
+        assert "fail  plugin Lil-Clanky/polytropos#plugins/polytropos is not installed\n" \
+               "        hermes polytropos update" in out
+        assert "fail  plugin Lil-Clanky/polytropos#plugins/polytropos_router is not installed" in out
 
 
 # --- install ---

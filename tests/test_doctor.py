@@ -21,22 +21,25 @@ PACK = {"plugins": [
 
 
 class FakeRun:
+    """A probe (`<name> --version`, or stack-canary's `canary run --help`) answers for versions[name], the name
+    without its folder, and raises FileNotFoundError for any other name."""
+
     def __init__(self, ram=16 * GB, sleep=None, versions=None):
         self.ram, self.sleep, self.versions, self.calls = ram, sleep, versions or {}, []
 
     def __call__(self, argv, **kw):
         argv = list(argv)
         self.calls.append(argv)
-        out = ""
+        out, probe, name = "", argv[1:] in (["--version"], ["run", "--help"]), Path(argv[0]).name
         if argv[1:] == ["-n", "hw.memsize"]:
             out = f"{self.ram}\n"
         elif argv[:2] == ["pmset", "-g"]:
             out = f" sleep                {self.sleep}\n displaysleep 10\n"
-        elif argv[1:] == ["--version"] and argv[0] in self.versions:
-            out = f"{argv[0]} {self.versions[argv[0]]}\n"
+        elif probe and name in self.versions:
+            out = f"{name} {self.versions[name]}\n"
         elif argv[0] == "launchctl":
             return SimpleNamespace(returncode=1, stdout="", stderr="")
-        elif argv[1:] == ["--version"]:
+        elif probe:
             raise FileNotFoundError(argv[0])
         return SimpleNamespace(returncode=0, stdout=out, stderr="")
 
@@ -50,7 +53,7 @@ def ctx(tmp_home):
     home = tmp_home / ".hermes"
     (home / "plugins").mkdir(parents=True)
     return d.DoctorContext(hermes_home=home, home=tmp_home, platform="darwin", lock=LOCK, pack=PACK,
-                           run=FakeRun(), http_get=api(), hermes_version="0.23.2")
+                           run=FakeRun(), http_get=api(), hermes_version="0.23.2", machine="arm64")
 
 
 def write_config(ctx, text):
@@ -114,15 +117,57 @@ def test_freellmapi_port_taken_by_another_program(ctx):
     assert r.status == "fail" and "3001" in r.label and "not FreeLLMAPI" in r.label
 
 
-def test_freellmapi_unhealthy_and_ok_with_mode(ctx):
-    ctx.http_get = api(401)
-    assert only(d.check_freellmapi(ctx)).status == "warn"
-    ctx.http_get = api(200)
+def freellmapi_with_key(key, seen):
+    """FreeLLMAPI's /v1/models: 200 for the unified key, 401 with a JSON body for no key or another key."""
+    def http_get(url, headers):
+        seen.append(headers)
+        return (200 if headers.get("Authorization") == f"Bearer {key}" else 401), b'{"error": {}}'
+    return http_get
+
+
+def test_freellmapi_health_uses_this_profiles_key(ctx, monkeypatch):
+    key, seen = "sk-doctor-test-key", []
+    ctx.http_get = freellmapi_with_key(key, seen)
+    monkeypatch.delenv("FREELLMAPI_API_KEY", raising=False)
+    no_key = only(d.check_freellmapi(ctx))
+    assert no_key.status == "warn" and no_key.label == "this profile has no FREELLMAPI_API_KEY"
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-another-key")
+    refused = only(d.check_freellmapi(ctx))
+    assert refused.status == "warn" and refused.label == "FreeLLMAPI does not accept this profile's FREELLMAPI_API_KEY"
+    assert no_key.fix == refused.fix == "hermes polytropos setup"
+    monkeypatch.setenv("FREELLMAPI_API_KEY", key)
     state = State()
     set_mode(state, "freellmapi", "external")
     save_state(state)
-    r = only(d.check_freellmapi(ctx))
-    assert r.status == "ok" and r.label == f"FreeLLMAPI {LOCK['freellmapi']['tag']}, external, 127.0.0.1:3001"
+    ok = only(d.check_freellmapi(ctx))
+    assert ok.status == "ok" and ok.label == f"FreeLLMAPI {LOCK['freellmapi']['tag']}, external, 127.0.0.1:3001"
+    assert {"Authorization": f"Bearer {key}"} in seen
+    assert key not in d.format_report([no_key, refused, ok]) and "sk-another-key" not in d.format_report([refused])
+
+
+def test_node_outside_freellmapis_range_fails_unless_freellmapi_is_external(ctx):
+    node = {"version": "v18.20.0"}
+    ctx.run = lambda argv, **kw: SimpleNamespace(returncode=0, stdout=node["version"] + "\n", stderr="")
+    r = only(d.check_node(ctx))  # FreeLLMAPI is not installed yet
+    assert r.status == "fail" and "v18.20.0" in r.label and "https://nodejs.org" in r.fix
+    state = State()
+    set_mode(state, "freellmapi", "managed")
+    save_state(state)
+    assert only(d.check_node(ctx)).status == "fail"
+    set_mode(state, "freellmapi", "external")
+    save_state(state)
+    assert only(d.check_node(ctx)).status == "info"
+    node["version"] = "v22.11.0"
+    assert only(d.check_node(ctx)) == d.CheckResult("ok", "Node v22.11.0")
+
+    def no_node(argv, **kw):
+        raise FileNotFoundError(argv[0])
+
+    ctx.run = no_node
+    set_mode(state, "freellmapi", "managed")
+    save_state(state)
+    r = only(d.check_node(ctx))
+    assert r.status == "fail" and "not found" in r.label
 
 
 ROUTER = """
@@ -165,12 +210,23 @@ def test_old_router_section(ctx):
 
 
 def test_programs(ctx):
-    ctx.run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": "0.0.1"})
+    ctx.run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": "0.0.1", "canary": ""})
     got = d.check_programs(ctx)
     assert got[0].status == "ok" and f"rtk {LOCK['rtk']['version']}" in got[0].label
+    assert f"stack-canary {LOCK['stack-canary']['ref'][:7]}" in got[0].label  # a working `canary run` is the pin
+    assert [str(ctx.home / ".local" / "bin" / "rtk"), "--version"] in ctx.run.calls
     by = {r.label.split()[0]: r for r in got[1:]}
     assert by["graphify"].status == "warn" and "0.0.1" in by["graphify"].label
     assert by["ast-grep"].status == "warn" and by["opencode"].status == "info"
+
+
+def test_program_checks_use_the_machine_from_the_context(ctx, monkeypatch):
+    seen = []
+    fake_matrix(monkeypatch, [])
+    monkeypatch.setattr(d, "programs", lambda lock, *, platform, machine: seen.append((platform, machine)) or [])
+    ctx.platform, ctx.machine = "linux", "aarch64"
+    assert d.check_programs(ctx) == [] and d.check_canary(ctx) == []  # a list without ollama raises nothing
+    assert seen == [("linux", "aarch64")] * 2
 
 
 def fake_matrix(monkeypatch, cells):

@@ -148,7 +148,7 @@ def _hermes_version(fx: Effects) -> str | None:
 
 def _expected_plugins(home: Path, lock: dict) -> dict:
     """The lock's plugins, and both own plugins at the commit of the general plugin's install record. Without that
-    record (a run from a checkout) their ref is empty and the check reports only whether they are installed."""
+    record (a run from a checkout) their ref is empty and the check reports both as not installed."""
     try:
         own = doctor.install_records(home).get((OWN_REPO, "plugins/polytropos"))
     except (OSError, ValueError):  # the plugin check reports it

@@ -6,12 +6,12 @@ import json
 import os
 import platform as _platform
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from ._shared import canary, guard
-from .freellm import PORT, FreeLLM
+from .freellm import PORT, FreeLLM, api_key
 from .programs import installed_version, needs_install, programs
 from .services import ServiceManager
 from .state import load_state
@@ -48,6 +48,7 @@ class DoctorContext:
     http_get: Callable  # (url, headers) -> (status, body); 0 refused, -1 not HTTP
     hermes_version: str | None
     tested_hermes: tuple[str, ...] = ("0.23.2",)
+    machine: str = field(default_factory=_platform.machine)
 
 
 def _router():
@@ -106,8 +107,8 @@ def _git_head(ctx: DoctorContext, folder: Path) -> str:
 
 
 def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
-    """Each pack entry against its install record. An entry with a name may also be a git clone in plugins/<name>,
-    and an entry without a ref only needs to be installed."""
+    """Each pack entry against its install record. An entry with a name may also be a git clone in plugins/<name>.
+    An entry without a ref counts as not installed: the own plugins have none when the general plugin has no record."""
     try:
         installed = install_records(ctx.hermes_home)
     except (OSError, ValueError) as e:
@@ -122,12 +123,12 @@ def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
         if key not in installed and entry.get("name") and (folder / ".git").exists():
             # programs.ponytail_fallback clones without Hermes's installer, which leaves no record
             installed[key] = (entry["name"], {"revision": _git_head(ctx, folder)})
-        if key not in installed:
+        if key not in installed or not pinned:
             results.append(CheckResult("fail", f"plugin {label} is not installed", fix="hermes polytropos update"))
             continue
         name, record = installed[key]
         revision = str(record.get("revision") or "").lower()
-        if pinned and revision != pinned:
+        if revision != pinned:
             results.append(CheckResult("warn", f"plugin {name} is at {revision[:7] or 'an unknown commit'}, "
                                                f"the pack pins {pinned[:7]}"))
         else:
@@ -145,11 +146,28 @@ def check_freellmapi(ctx: DoctorContext) -> list[CheckResult]:
         return [CheckResult("fail", f"port {PORT} is used by a program that is not FreeLLMAPI",
                             "FreeLLMAPI cannot start while it is taken",
                             f"Stop that program or free port {PORT}, then run hermes polytropos install")]
-    if not found.healthy:
+    key = api_key()  # never printed
+    if not key:
+        return [CheckResult("warn", "this profile has no FREELLMAPI_API_KEY", fix="hermes polytropos setup")]
+    status, _ = ctx.http_get(f"http://127.0.0.1:{PORT}/v1/models", {"Authorization": f"Bearer {key}"})
+    if status == 401:
+        return [CheckResult("warn", "FreeLLMAPI does not accept this profile's FREELLMAPI_API_KEY",
+                            fix="hermes polytropos setup")]
+    if status != 200:
         return [CheckResult("warn", f"FreeLLMAPI answers on port {PORT} but /v1/models is not healthy",
-                            "it returned 401, check its provider keys")]
+                            f"it returned {status}")]
     mode = load_state().shared.get("freellmapi", {}).get("mode") or "mode unknown"
     return [CheckResult("ok", f"FreeLLMAPI {ctx.lock['freellmapi']['tag']}, {mode}, 127.0.0.1:{PORT}")]
+
+
+def check_node(ctx: DoctorContext) -> list[CheckResult]:
+    ok, found = FreeLLM(run=ctx.run).node_ok()
+    if ok:
+        return [CheckResult("ok", f"Node {found}")]
+    if load_state().shared.get("freellmapi", {}).get("mode") == "external":
+        return [CheckResult("info", found, "FreeLLMAPI runs in external mode, so Polytropos does not run it")]
+    return [CheckResult("fail", found, fix="Install Node 22 or 24 for FreeLLMAPI, for example from "
+                                           "https://nodejs.org/en/download")]
 
 
 def check_router(ctx: DoctorContext) -> list[CheckResult]:
@@ -181,9 +199,9 @@ def check_old_router_section(ctx: DoctorContext) -> list[CheckResult]:
 
 def check_programs(ctx: DoctorContext) -> list[CheckResult]:
     results, present = [], []
-    for p in programs(ctx.lock, platform=ctx.platform, machine=_platform.machine()):
+    for p in programs(ctx.lock, platform=ctx.platform, machine=ctx.machine):
         if not needs_install(p, ctx.run):
-            present.append(p.name if p.name == "stack-canary" else f"{p.name} {p.version}")
+            present.append(f"{p.name} {p.version}")
             continue
         found = installed_version(p, ctx.run)
         what = f"{p.name} is not installed" if found is None else f"{p.name} {found} differs from pinned {p.version}"
@@ -204,9 +222,9 @@ def _local_slots(cfg):
 def check_canary(ctx: DoctorContext) -> list[CheckResult]:
     cfg, _ = _router_config(ctx)
     matrix, local = canary.load_matrix(), canary.load_local_results()
-    ollama = next(p for p in programs(ctx.lock, platform=ctx.platform, machine=_platform.machine())
-                  if p.name == "ollama")
-    version = installed_version(ollama, ctx.run)
+    ollama = next((p for p in programs(ctx.lock, platform=ctx.platform, machine=ctx.machine)
+                   if p.name == "ollama"), None)
+    version = installed_version(ollama, ctx.run) if ollama else None
     results = []
     for slot, up in _local_slots(cfg).items():
         if up.runtime != "ollama" or version is None:
@@ -306,8 +324,9 @@ def check_sleep(ctx: DoctorContext) -> list[CheckResult]:
     return [CheckResult("ok", "the Mac does not sleep while the gateway runs")]
 
 
-CHECKS = (check_hermes, check_plugins, check_freellmapi, check_router, check_old_router_section, check_programs,
-          check_canary, check_fit, check_key_files, check_profiles, check_ponytail, check_superpowers, check_sleep)
+CHECKS = (check_hermes, check_plugins, check_freellmapi, check_node, check_router, check_old_router_section,
+          check_programs, check_canary, check_fit, check_key_files, check_profiles, check_ponytail, check_superpowers,
+          check_sleep)
 
 
 def run_checks(ctx: DoctorContext) -> list[CheckResult]:

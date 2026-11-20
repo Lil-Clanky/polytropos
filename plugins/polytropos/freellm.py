@@ -77,6 +77,15 @@ class RestartFailed(Exception):
     """The data and release were restored but the service did not start."""
 
 
+def api_key() -> str | None:
+    """This profile's FREELLMAPI_API_KEY, read the way the router reads it. Callers never print it."""
+    try:
+        from hermes_cli.config import get_env_value  # reads the active profile's .env
+    except ImportError:  # outside Hermes
+        return os.environ.get("FREELLMAPI_API_KEY")
+    return get_env_value("FREELLMAPI_API_KEY")
+
+
 def _default_get(url: str, headers: dict) -> tuple[int, bytes]:
     """(0, b"") when the connection is refused, (-1, b"") when something listens but does not answer HTTP."""
     try:

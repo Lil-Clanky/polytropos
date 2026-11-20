@@ -6,15 +6,7 @@ import os
 from . import doctor
 from ._shared import guard, paths
 from .cli import hermes_home
-from .freellm import PORT, FreeLLM
-
-
-def _api_key() -> str | None:
-    try:
-        from hermes_cli.config import get_env_value  # reads the active profile's .env
-    except ImportError:  # outside Hermes
-        return os.environ.get("FREELLMAPI_API_KEY")
-    return get_env_value("FREELLMAPI_API_KEY")
+from .freellm import PORT, FreeLLM, api_key
 
 
 def _freellmapi() -> str:
@@ -24,7 +16,7 @@ def _freellmapi() -> str:
         return f"FreeLLMAPI: not running on 127.0.0.1:{PORT}"
     if not found.is_freellmapi:
         return f"FreeLLMAPI: port {PORT} is used by a program that is not FreeLLMAPI"
-    key = _api_key()
+    key = api_key()
     if fl.health(key) if key else found.healthy:
         return f"FreeLLMAPI: healthy on 127.0.0.1:{PORT}"
     return f"FreeLLMAPI: answers on port {PORT}, but /v1/models is not healthy"

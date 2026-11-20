@@ -75,14 +75,27 @@ def test_installed_version_parses():
     assert P.installed_version(sg, lambda *a, **k: proc("ast-grep 0.39.1\n")) == "0.39.1"
 
 
-def test_missing_binary_is_none():
+@pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+def test_missing_or_unrunnable_binary_is_none(error):
     rtk = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["rtk"]
 
     def boom(*a, **k):
-        raise FileNotFoundError
+        raise error
 
     assert P.installed_version(rtk, boom) is None
     assert P.needs_install(rtk, boom) is True
+
+
+def test_rtk_is_checked_where_polytropos_installs_it(tmp_home):
+    rtk = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["rtk"]
+    assert rtk.version_cmd == [str(tmp_home / ".local" / "bin" / "rtk"), "--version"]
+
+
+def test_stack_canary_counts_as_installed_when_canary_run_works():
+    sc = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["stack-canary"]
+    assert sc.version_cmd == ["canary", "run", "--help"]  # stack-canary has no --version flag (cli.py at b8490a9)
+    assert P.needs_install(sc, lambda *a, **k: proc("usage: canary run [-h] ...\n")) is False
+    assert P.needs_install(sc, lambda *a, **k: proc("", code=2)) is True
 
 
 def test_matching_version_is_skipped():

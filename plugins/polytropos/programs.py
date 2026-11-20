@@ -46,9 +46,9 @@ def _rtk(lock: dict, platform: str, machine: str) -> Program:
     if key is None:
         raise ValueError(f"no rtk asset for platform {platform!r} and machine {machine!r}")
     asset = lock["rtk"]["assets"][key]
-    dest = str(Path.home() / ".local" / "bin" / "rtk")
+    dest = str(Path.home() / ".local" / "bin" / "rtk")  # checked there too, so another rtk on PATH does not count
     return Program(
-        "rtk", lock["rtk"]["version"], ["rtk", "--version"], [[dest, "init", "--agent", "hermes"]],
+        "rtk", lock["rtk"]["version"], [dest, "--version"], [[dest, "init", "--agent", "hermes"]],
         asset_url=asset["url"], asset_sha256=asset["sha256"],
     )
 
@@ -79,8 +79,8 @@ def programs(lock: dict, *, platform: str, machine: str) -> list[Program]:
             ["uv", "tool", "install", f"{a['package']}=={a['version']}"],
             ["hermes", "skills", "install", "official/software-development/ast-grep"],
         ]),
-        # The pin is a commit, so the installed version never equals it and uv decides whether to act.
-        Program("stack-canary", s["ref"], ["canary", "--version"], [
+        # stack-canary has no version flag; installed_version counts a working `canary run` as the pinned commit.
+        Program("stack-canary", s["ref"][:7], ["canary", "run", "--help"], [
             ["uv", "tool", "install", f"git+{s['repo']}@{s['ref']}"],
         ]),
         Program("opencode", oc["version"], ["opencode", "--version"], [
@@ -103,8 +103,10 @@ def programs(lock: dict, *, platform: str, machine: str) -> list[Program]:
 def installed_version(p: Program, run=subprocess.run) -> str | None:
     try:
         r = run(p.version_cmd, capture_output=True, text=True, timeout=30)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):  # missing, or present but not runnable
         return None
+    if p.name == "stack-canary":
+        return p.version if r.returncode == 0 else None
     m = _VERSION.search((r.stdout or "") + (r.stderr or ""))
     return m.group(0) if m else None
 
