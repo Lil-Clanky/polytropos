@@ -14,6 +14,8 @@ from typing import Callable
 
 import tomllib
 
+from .state import load_state
+
 _VERSION = re.compile(r"\d+\.\d+\.\d+")
 _ASSET_KEYS = {
     ("darwin", "arm64"): "darwin-arm64",
@@ -79,7 +81,7 @@ def programs(lock: dict, *, platform: str, machine: str) -> list[Program]:
             ["uv", "tool", "install", f"{a['package']}=={a['version']}"],
             ["hermes", "skills", "install", "official/software-development/ast-grep"],
         ]),
-        # stack-canary has no version flag; installed_version counts a working `canary run` as the pinned commit.
+        # stack-canary has no version flag; its version is the commit that install recorded in state.json.
         Program("stack-canary", s["ref"][:7], ["canary", "run", "--help"], [
             ["uv", "tool", "install", f"git+{s['repo']}@{s['ref']}"],
         ]),
@@ -105,15 +107,19 @@ def installed_version(p: Program, run=subprocess.run) -> str | None:
         r = run(p.version_cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):  # missing, or present but not runnable
         return None
-    if p.name == "stack-canary":
-        return p.version if r.returncode == 0 else None
+    if p.name == "stack-canary":  # a working `canary run` and the commit on record, "" when there is no record
+        return load_state().shared.get(p.name, {}).get("version", "") if r.returncode == 0 else None
     m = _VERSION.search((r.stdout or "") + (r.stderr or ""))
     return m.group(0) if m else None
 
 
+def is_current(p: Program, version: str | None) -> bool:
+    """Whether the version installed_version read counts as the pinned one. Ollama passes on presence alone."""
+    return version is not None if p.name == "ollama" else version == p.version
+
+
 def needs_install(p: Program, run=subprocess.run) -> bool:
-    v = installed_version(p, run)
-    return v is None if p.name == "ollama" else v != p.version
+    return not is_current(p, installed_version(p, run))
 
 
 def _download(url: str, dest: Path) -> None:
@@ -199,7 +205,7 @@ def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], N
             except FileNotFoundError:
                 ok = False
             if not ok:
-                print("Manual step: run `" + " ".join(cmd) + "` once Hermes is installed.")
+                print(f"The MCP server {cmd[3]} was not added. To add it, run: " + " ".join(cmd))
             continue
         run(cmd, check=True)
 

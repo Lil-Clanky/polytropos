@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from polytropos import programs as P
+from polytropos.state import State, save_state, use_shared
 
 LOCK = P.load_lock(Path(__file__).resolve().parent.parent / "versions.lock")
 
@@ -91,11 +92,17 @@ def test_rtk_is_checked_where_polytropos_installs_it(tmp_home):
     assert rtk.version_cmd == [str(tmp_home / ".local" / "bin" / "rtk"), "--version"]
 
 
-def test_stack_canary_counts_as_installed_when_canary_run_works():
+def test_stack_canary_is_current_only_at_the_commit_install_recorded(tmp_home):
     sc = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["stack-canary"]
-    assert sc.version_cmd == ["canary", "run", "--help"]  # stack-canary has no --version flag (cli.py at b8490a9)
-    assert P.needs_install(sc, lambda *a, **k: proc("usage: canary run [-h] ...\n")) is False
-    assert P.needs_install(sc, lambda *a, **k: proc("", code=2)) is True
+    assert sc.version_cmd == ["canary", "run", "--help"]  # stack-canary has no --version flag (cli.py at 5063da2)
+    works, broken = lambda *a, **k: proc("usage: canary run [-h] ...\n"), lambda *a, **k: proc("", code=2)
+    assert P.installed_version(sc, works) == "" and P.needs_install(sc, works) is True  # no record
+    state = State()
+    for commit, needed in (("0123abc", True), (LOCK["stack-canary"]["ref"][:7], False)):
+        use_shared(state, "stack-canary", str(tmp_home), version=commit, installed_by_us=True)
+        save_state(state)
+        assert P.installed_version(sc, works) == commit and P.needs_install(sc, works) is needed
+    assert P.installed_version(sc, broken) is None and P.needs_install(sc, broken) is True
 
 
 def test_matching_version_is_skipped():
@@ -159,7 +166,9 @@ def test_context7_mcp_step_falls_back_to_manual(capsys):
         return proc()
 
     P.install(c7, run)
-    assert "hermes mcp add context7" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "The MCP server context7 was not added" in out and "hermes mcp add context7" in out
+    assert "once Hermes is installed" not in out
 
 
 def test_ponytail_fallback_order(tmp_home):

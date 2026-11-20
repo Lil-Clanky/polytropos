@@ -9,7 +9,7 @@ import pytest
 from polytropos import doctor as d
 from polytropos._shared import canary as shared_canary
 from polytropos.programs import load_lock
-from polytropos.state import State, save_state, set_mode
+from polytropos.state import State, save_state, set_mode, use_shared
 
 LOCK = load_lock(Path(__file__).resolve().parent.parent / "versions.lock")
 SHA, SHA2 = "a" * 40, "b" * 40
@@ -140,9 +140,24 @@ def test_freellmapi_health_uses_this_profiles_key(ctx, monkeypatch):
     set_mode(state, "freellmapi", "external")
     save_state(state)
     ok = only(d.check_freellmapi(ctx))
-    assert ok.status == "ok" and ok.label == f"FreeLLMAPI {LOCK['freellmapi']['tag']}, external, 127.0.0.1:3001"
+    assert ok.status == "ok" and ok.label == "FreeLLMAPI, external, 127.0.0.1:3001"  # Polytropos knows no tag for it
     assert {"Authorization": f"Bearer {key}"} in seen
     assert key not in d.format_report([no_key, refused, ok]) and "sk-another-key" not in d.format_report([refused])
+    set_mode(state, "freellmapi", "managed")
+    save_state(state)
+    root = ctx.home / ".local" / "share" / "polytropos" / "freellmapi"
+    (root / "releases" / "v0.16.30").mkdir(parents=True)
+    (root / "current").symlink_to(root / "releases" / "v0.16.30")
+    assert only(d.check_freellmapi(ctx)).label == "FreeLLMAPI v0.16.30, managed, 127.0.0.1:3001"  # the running tag
+
+
+@pytest.mark.parametrize("status, detail", [(0, "FreeLLMAPI did not answer"), (-1, "FreeLLMAPI did not answer"),
+                                            (503, "it returned HTTP 503")])
+def test_freellmapi_unhealthy_never_shows_internal_codes(ctx, monkeypatch, status, detail):
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-doctor-test-key")
+    ctx.http_get = lambda url, headers: (status, b"") if "Authorization" in headers else (200, b'{"data": []}')
+    r = only(d.check_freellmapi(ctx))
+    assert r.status == "warn" and r.detail == detail
 
 
 def test_node_outside_freellmapis_range_fails_unless_freellmapi_is_external(ctx):
@@ -202,6 +217,35 @@ def test_router_window_and_unanswered_upstream(ctx):
     assert "ollama" in got[1].label
 
 
+def test_router_says_when_a_local_upstream_is_not_ollama(ctx):
+    write_config(ctx, """
+plugins:
+  entries:
+    polytropos-router:
+      upstreams:
+        cloud: {base_url: "http://127.0.0.1:3001/v1", context_window: 128000}
+        ollama: {base_url: "http://127.0.0.1:11434/v1", local: true, runtime: ollama}
+        studio: {base_url: "http://127.0.0.1:1234/v1", local: true}
+      routes:
+        simple: [ollama/qwen3.5:0.8b, studio/m, cloud/auto]
+        complex: [cloud/auto]
+""")
+    seen = []
+
+    def http_get(url, headers):
+        seen.append(url)
+        if url.endswith("/api/version"):
+            return (200, b'{"version": "0.40.16"}') if ":11434" in url else (404, b"not found")
+        return 200, b'{"data": []}'
+
+    ctx.http_get = http_get
+    got = d.check_router(ctx)
+    assert got[0].status == "ok"
+    r = only(got[1:])
+    assert r.status == "info" and "studio" in r.label and "fit check covers Ollama only" in r.detail
+    assert "http://127.0.0.1:3001/api/version" not in seen  # a cloud upstream is not probed
+
+
 def test_old_router_section(ctx):
     assert d.check_old_router_section(ctx) == []
     write_config(ctx, "router:\n  mode: x\n")
@@ -210,14 +254,19 @@ def test_old_router_section(ctx):
 
 
 def test_programs(ctx):
-    ctx.run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": "0.0.1", "canary": ""})
+    ctx.run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": "0.0.1", "canary": "", "ollama": "0.30.0"})
     got = d.check_programs(ctx)
     assert got[0].status == "ok" and f"rtk {LOCK['rtk']['version']}" in got[0].label
-    assert f"stack-canary {LOCK['stack-canary']['ref'][:7]}" in got[0].label  # a working `canary run` is the pin
+    assert "ollama 0.30.0" in got[0].label  # the version it read: Ollama passes on presence alone
     assert [str(ctx.home / ".local" / "bin" / "rtk"), "--version"] in ctx.run.calls
     by = {r.label.split()[0]: r for r in got[1:]}
     assert by["graphify"].status == "warn" and "0.0.1" in by["graphify"].label
     assert by["ast-grep"].status == "warn" and by["opencode"].status == "info"
+    assert by["stack-canary"].status == "warn" and "commit is unknown" in by["stack-canary"].label
+    state = State()
+    use_shared(state, "stack-canary", str(ctx.hermes_home), version=LOCK["stack-canary"]["ref"][:7], installed_by_us=True)
+    save_state(state)
+    assert f"stack-canary {LOCK['stack-canary']['ref'][:7]}" in d.check_programs(ctx)[0].label
 
 
 def test_program_checks_use_the_machine_from_the_context(ctx, monkeypatch):
@@ -271,6 +320,8 @@ plugins:
     ctx.run = FakeRun(ram=ram)
     r = only(d.check_fit(ctx))
     assert r.status == status
+    if status == "warn":
+        assert "about 20,000 tokens" in r.detail
     if status == "info" and ram > 16 * GB:
         assert "32 GB" in r.label
 

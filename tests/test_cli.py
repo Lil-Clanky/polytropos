@@ -390,6 +390,9 @@ def test_update_repairs_a_missing_pack_plugin_and_leaves_a_complete_home_alone(t
     meta["superpowers"] = {"source": "https://github.com/obra/superpowers.git", "revision": superpowers["commit"]}
     meta_path.write_text(json.dumps(meta))
     same_lock = (ROOT / "versions.lock").read_text()  # nothing new: the release pins what is installed
+    state = load_state()  # stack-canary too, at the commit that install records
+    use_shared(state, "stack-canary", str(home), version=LOCK["stack-canary"]["ref"][:7], installed_by_us=True)
+    save_state(state)
     fx.run, fx.fetch = (run := FakeRun(versions=versions)), fetcher("v0.2.0", yaml.safe_dump(pack), same_lock)
     assert cli.handle(parse("update"), fx) == 0
     out = capsys.readouterr().out
@@ -436,10 +439,15 @@ def no_fetch(url):
 def test_update_programs_uses_the_installed_plugins_pins_and_fetches_nothing(tmp_home, monkeypatch):
     installed_lock(monkeypatch, tmp_home, new_lock_text())
     default_integrations(tmp_home / ".hermes")
-    run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
-                            "ast-grep": LOCK["ast-grep"]["version"]})
+    versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
+                "ast-grep": LOCK["ast-grep"]["version"]}
+    run = FakeRun(versions=versions)
     assert cli.handle(parse("update", "programs"), cli.Effects(run=run, fetch=no_fetch, ask=lambda q: "y")) == 0
     assert run.commands() == [["uv", "tool", "install", f"git+{LOCK['stack-canary']['repo']}@{'d' * 40}"]]
+    assert load_state().shared["stack-canary"]["version"] == "d" * 7  # the commit it installed
+    run = FakeRun(versions={**versions, "canary": ""})
+    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, fetch=no_fetch, ask=lambda q: "y")) == 0
+    assert run.commands() == []
 
 
 def test_update_freellmapi_shows_both_tags_and_the_compare_link_before_it_asks(tmp_home, monkeypatch, capsys):

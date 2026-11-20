@@ -12,7 +12,7 @@ from typing import Callable
 
 from ._shared import canary, guard
 from .freellm import PORT, FreeLLM, api_key
-from .programs import installed_version, needs_install, programs
+from .programs import installed_version, is_current, programs
 from .services import ServiceManager
 from .state import load_state
 
@@ -138,7 +138,8 @@ def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
 
 def check_freellmapi(ctx: DoctorContext) -> list[CheckResult]:
     services = ServiceManager(platform=ctx.platform, run=ctx.run, home=ctx.home)
-    found = FreeLLM(run=ctx.run, http_get=ctx.http_get, services=services).detect()
+    fl = FreeLLM(run=ctx.run, http_get=ctx.http_get, services=services)
+    found = fl.detect()
     if not found.listening:
         return [CheckResult("fail", f"FreeLLMAPI is not running on 127.0.0.1:{PORT}",
                             fix="hermes polytropos install")]
@@ -153,11 +154,12 @@ def check_freellmapi(ctx: DoctorContext) -> list[CheckResult]:
     if status == 401:
         return [CheckResult("warn", "FreeLLMAPI does not accept this profile's FREELLMAPI_API_KEY",
                             fix="hermes polytropos setup")]
-    if status != 200:
+    if status != 200:  # 0 and -1 are http_get's codes for no answer, never an HTTP status
         return [CheckResult("warn", f"FreeLLMAPI answers on port {PORT} but /v1/models is not healthy",
-                            f"it returned {status}")]
+                            f"it returned HTTP {status}" if status > 0 else "FreeLLMAPI did not answer")]
     mode = load_state().shared.get("freellmapi", {}).get("mode") or "mode unknown"
-    return [CheckResult("ok", f"FreeLLMAPI {ctx.lock['freellmapi']['tag']}, {mode}, 127.0.0.1:{PORT}")]
+    tag = fl.current_tag() if mode == "managed" else ""  # an external FreeLLMAPI's tag is not known
+    return [CheckResult("ok", f"FreeLLMAPI{' ' + tag if tag else ''}, {mode}, 127.0.0.1:{PORT}")]
 
 
 def check_node(ctx: DoctorContext) -> list[CheckResult]:
@@ -179,11 +181,24 @@ def check_router(ctx: DoctorContext) -> list[CheckResult]:
         results.append(CheckResult("warn", f"cloud model {slot.upstream}/{slot.model} reports a window of "
                                            f"{floor.window(cfg, slot):,} tokens",
                                    f"Hermes refuses models below {floor.FLOOR:,} tokens"))
+    notes = []
     for up in cfg.upstreams.values():
         status, _ = ctx.http_get(up.base_url.rstrip("/") + "/models", {})
         if status <= 0:
             results.append(CheckResult("warn", f"upstream {up.name} does not answer on {up.base_url}/models"))
-    return results or [CheckResult("ok", f"router config, {len(cfg.upstreams)} upstreams answer")]
+        elif up.local and not _answers_as_ollama(ctx, up.base_url):
+            notes.append(CheckResult("info", f"local upstream {up.name} does not answer as Ollama",
+                                     "the fit check covers Ollama only, so this upstream gets the memory, swap and "
+                                     "disk checks without it"))
+    return (results or [CheckResult("ok", f"router config, {len(cfg.upstreams)} upstreams answer")]) + notes
+
+
+def _answers_as_ollama(ctx: DoctorContext, base_url: str) -> bool:
+    status, body = ctx.http_get(guard.ollama_root(base_url) + "/api/version", {})
+    try:
+        return status == 200 and isinstance(json.loads(body).get("version"), str)
+    except (ValueError, AttributeError):  # not JSON, or JSON that is not an object
+        return False
 
 
 def check_old_router_section(ctx: DoctorContext) -> list[CheckResult]:
@@ -200,11 +215,16 @@ def check_old_router_section(ctx: DoctorContext) -> list[CheckResult]:
 def check_programs(ctx: DoctorContext) -> list[CheckResult]:
     results, present = [], []
     for p in programs(ctx.lock, platform=ctx.platform, machine=ctx.machine):
-        if not needs_install(p, ctx.run):
-            present.append(f"{p.name} {p.version}")
-            continue
         found = installed_version(p, ctx.run)
-        what = f"{p.name} is not installed" if found is None else f"{p.name} {found} differs from pinned {p.version}"
+        if is_current(p, found):
+            present.append(f"{p.name} {found}")
+            continue
+        if found is None:
+            what = f"{p.name} is not installed"
+        elif not found:  # stack-canary runs, but install recorded no commit for it
+            what = f"{p.name} runs, but its commit is unknown"
+        else:
+            what = f"{p.name} {found} differs from pinned {p.version}"
         results.append(CheckResult("info" if p.optional and found is None else "warn", what,
                                    fix="hermes polytropos install"))
     return ([CheckResult("ok", ", ".join(present))] if present else []) + results
@@ -264,7 +284,9 @@ def check_fit(ctx: DoctorContext) -> list[CheckResult]:
         if (size is not None and size > ADVICE_PARAMS_B) or up.context_window > ADVICE_WINDOW:
             results.append(CheckResult(
                 "warn", f"{slot.upstream}/{slot.model} may be too large for {gb:.0f} GB RAM",
-                f"advice for 16 GB is a model of {ADVICE_PARAMS_B:g}B or smaller with a window of {ADVICE_WINDOW}"))
+                f"advice for 16 GB is a model of {ADVICE_PARAMS_B:g}B or smaller with a window of {ADVICE_WINDOW}. "
+                "Such a window serves short requests without tools, and an agent turn with Hermes's default tools "
+                "needs a window of about 20,000 tokens by the router's estimate"))
     return results or [CheckResult("info", f"{gb:.0f} GB RAM, local models fit the advice")]
 
 

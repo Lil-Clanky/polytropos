@@ -47,12 +47,12 @@ package = "ast-grep-cli"
 version = "0.51.3"
 
 # stack-canary, license MIT (own repository).
-# The ref is the head of the branch feat/matrix-json-openai (b8490a9), which adds the
-# --summary-json and --openai-endpoint options Polytropos needs. The commit is on that branch
-# and not yet on stack-canary's main; the controller moves the pin once it is merged.
+# The ref is the head of the branch feat/matrix-json-openai (5063da2), which adds the
+# --summary-json and --openai-endpoint options Polytropos needs. Before a Polytropos release
+# this commit must be on stack-canary's main and pushed. A fast-forward merge keeps the same sha.
 [stack-canary]
 repo = "https://github.com/Lil-Clanky/stack-canary"
-ref = "b8490a92414c45064317953ebd2c15afae930cb1"
+ref = "5063da2f359f1445da4bd52b3433d4f91d356761"
 
 # Ollama, license MIT.
 # version: newest row of the published stack-canary matrix (MATRIX.md, identical in the publish
