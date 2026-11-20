@@ -1,5 +1,6 @@
 """Canary verdicts: which model and runtime combinations passed the tool-call checks."""
 
+import contextlib
 import http.client
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 from .paths import cache_dir, data_dir
 
 MATRIX_URL = "https://raw.githubusercontent.com/Lil-Clanky/stack-canary/matrix/matrix.json"
+RETRY_AFTER_FAILURE_S = 3600
 TOOL_CHECKS = ("A1", "A2", "A3", "A4", "A5", "A6")
 
 
@@ -69,22 +71,32 @@ def _write_atomic(path: Path, text: str) -> None:
 def load_matrix(*, cache_path: Path | None = None, fetch: Callable[[str], bytes] | None = None,
                 now: float | None = None, max_age_s: int = 86400) -> Matrix:
     cache_path = cache_path or cache_dir() / "canary-matrix.json"
+    stamp = cache_path.with_name(cache_path.name + ".failed")  # its time is the last failed download
     fetch = fetch or _fetch
     now = time.time() if now is None else now
     cached = None
     try:
         cached = parse_matrix(json.loads(cache_path.read_text()))
-        if now - cache_path.stat().st_mtime < max_age_s:
+        if 0 <= now - cache_path.stat().st_mtime < max_age_s:
             return cached
     except (OSError, ValueError, KeyError, TypeError):
         pass
+    with contextlib.suppress(OSError):
+        if 0 <= now - stamp.stat().st_mtime < RETRY_AFTER_FAILURE_S:
+            return cached or Matrix([])
     try:
         raw = fetch(MATRIX_URL)
         matrix = parse_matrix(json.loads(raw))
         _write_atomic(cache_path, raw.decode())
-        return matrix
     except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):  # e.g. a truncated download
+        with contextlib.suppress(OSError):
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.touch()
+            os.utime(stamp, (now, now))
         return cached or Matrix([])
+    with contextlib.suppress(OSError):
+        stamp.unlink(missing_ok=True)
+    return matrix
 
 
 def local_results_path() -> Path:

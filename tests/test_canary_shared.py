@@ -76,6 +76,38 @@ def test_stale_cache_used_when_fetch_fails(tmp_path):
     assert matrix.verdict("0.40.16", "llama3.2:3b") == "pass"
 
 
+def test_cache_from_the_future_is_stale(tmp_path):
+    cache = tmp_path / "m.json"
+    cache.write_text(FIXTURE.read_text())
+    urls = []
+    canary.load_matrix(cache_path=cache, fetch=lambda u: urls.append(u) or FIXTURE.read_bytes(),
+                       now=cache.stat().st_mtime - 100)
+    assert urls == [canary.MATRIX_URL]
+
+
+def test_failed_download_waits_an_hour(tmp_path):
+    cache, stamp = tmp_path / "m.json", tmp_path / "m.json.failed"
+    cache.write_text(FIXTURE.read_text())
+    t0 = cache.stat().st_mtime + 10**6  # the cache is stale
+    urls = []
+
+    def fail(url):
+        urls.append(url)
+        raise OSError("offline")
+
+    def load(now, fetch=fail):
+        return canary.load_matrix(cache_path=cache, fetch=fetch, now=now).verdict("0.40.16", "llama3.2:3b")
+
+    assert load(t0) == "pass" and len(urls) == 1 and stamp.exists()
+    assert load(t0 + 3599) == "pass" and len(urls) == 1  # no download within the hour, the last copy is used
+    assert load(t0 + 3600) == "pass" and len(urls) == 2
+    assert load(t0 + 3500) == "pass" and len(urls) == 3  # a stamp from the future does not hold
+    assert load(t0 + 10**5, fetch=lambda u: FIXTURE.read_bytes()) == "pass" and not stamp.exists()
+    cache.unlink()
+    load(t0 + 10**6)
+    assert load(t0 + 10**6 + 1) == "unknown" and len(urls) == 4  # without a copy the matrix is empty
+
+
 def test_no_cache_no_network_is_empty(tmp_path):
     def fail(url):
         raise OSError("offline")
