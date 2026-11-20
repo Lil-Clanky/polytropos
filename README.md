@@ -38,7 +38,7 @@ The programs are pinned in [versions.lock](versions.lock) and the plugins in [he
 - Hermes Agent v0.23.2, installed and working. The doctor warns when it finds another version.
 - macOS, or Linux with systemd. The FreeLLMAPI service runs as a LaunchAgent on macOS and as a systemd user unit on Linux.
 - git and [uv](https://docs.astral.sh/uv/).
-- Node.js `>=20.18.0 <25.0.0` with npm, to build and run FreeLLMAPI. Polytropos does not install Node.
+- Node.js `>=20.18.0 <25.0.0` with npm, to build and run FreeLLMAPI. Polytropos does not install Node, and the doctor checks its version.
 - `~/.local/bin` on your `PATH`. Polytropos puts rtk there, and on macOS also Ollama.
 
 ## Install
@@ -57,16 +57,16 @@ hermes polytropos doctor
 Here is what each step does.
 
 1. **Get the pack file.** Clone the repository, or download `hermes-pack.yaml` from a release and install that file.
-2. **Install the pack.** Hermes shows its review screen and asks you to confirm with `y`, which is why the pack install needs a terminal. It installs polytropos, polytropos-router and superpowers. On Hermes v0.23.2 it also prints a failure line for ponytail and exits with status 1. Step 4 installs ponytail another way. When the install stops with `fatal: shallow file has changed since we read it`, run the same command again. To install the pack over an earlier install, add `--force`.
+2. **Install the pack.** Hermes shows its review screen and asks you to confirm with `y`, which is why the pack install needs a terminal. It installs polytropos, polytropos-router and superpowers. On Hermes v0.23.2 it also prints a failure line for ponytail and exits with status 1. Step 4 installs ponytail another way. When an entry fails with `fatal: shallow file has changed since we read it`, run the same command again, and ignore the messages that the other plugins already exist. To install the pack over an earlier install, add `--force`.
 3. **Run the doctor.** On a new install it reports FreeLLMAPI, ponytail and the programs as missing.
 4. **Install the rest.** `hermes polytropos install` builds FreeLLMAPI at its pinned tag and runs it as a service on `127.0.0.1:3001`. It asks before it installs ponytail from its pinned commit, installs the default programs, and asks about each optional one. When a FreeLLMAPI already answers on port 3001, Polytropos uses that one as it is and leaves its updates to you. To let Polytropos run it instead, stop it and run `hermes polytropos adopt --from <its checkout>`. When another program holds port 3001, install stops and asks you to free the port first.
-5. **Add provider keys.** Open FreeLLMAPI's dashboard at http://127.0.0.1:3001, add your provider keys on its Keys page, and copy the unified API key from the header of that page.
-6. **Connect Hermes.** `hermes polytropos setup` runs FreeLLMAPI's own `setup-hermes`. When it asks for an API key, paste the unified key. `setup-hermes` stores the key as `FREELLMAPI_API_KEY` in the profile's `.env` and makes FreeLLMAPI's model the default. Polytropos then asks whether to make the router the default model instead, and writes the router settings.
+5. **Add provider keys.** Open FreeLLMAPI's dashboard at http://127.0.0.1:3001, add your provider keys, and copy FreeLLMAPI's unified API key, which the next step asks for.
+6. **Connect Hermes.** `hermes polytropos setup` runs FreeLLMAPI's own `setup-hermes`. When it asks for an API key, paste the unified key. `setup-hermes` stores the key as `FREELLMAPI_API_KEY` in the profile's `.env` and rewrites the profile's `model` section so that FreeLLMAPI's model is the default. Polytropos keeps a copy of the `model` section from before, so that uninstall can put it back. Then it asks whether to make the router the default model instead, and writes the router settings.
 7. **Run the doctor again.** When no check fails and the router is not the default model yet, the doctor asks whether to make it the default.
 
 ### The FreeLLMAPI key
 
-Hermes needs `FREELLMAPI_API_KEY` for every turn on the router, also when all routes are local. Without it Hermes stops the turn with an error that starts with `No usable credentials found for provider 'polytropos-router'. Set FREELLMAPI_API_KEY.` When a fallback provider is configured (see `hermes fallback`), Hermes runs the turn on the fallback instead, without the router. `hermes polytropos setup` leaves the key in the profile's `.env`.
+Hermes needs `FREELLMAPI_API_KEY` for every turn on the router, also when all routes are local. Without it Hermes stops the turn with an error that starts with `No usable credentials found for provider 'polytropos-router'. Set FREELLMAPI_API_KEY.` When fallback providers are set with `hermes fallback`, the gateway and the TUI run the turn on the first fallback that has credentials instead, without the router. `hermes polytropos setup` leaves the key in the profile's `.env`.
 
 ### Restarting the gateway
 
@@ -74,7 +74,7 @@ A running gateway keeps the old plugin code until it restarts. Hermes prints `he
 
 ### Profiles
 
-`hermes polytropos` works on the active Hermes profile. Plugins, settings and the FreeLLMAPI key belong to a profile, so run the install steps in each profile that should use Polytropos, for example `hermes --profile <name> polytropos setup`. FreeLLMAPI and the programs are shared by the whole machine. Polytropos records which profiles use each shared part, and an uninstall from one profile removes a shared part only when no other profile uses it.
+`hermes polytropos` works on the active Hermes profile. Plugins, settings and the FreeLLMAPI key belong to a profile, so run the install steps in each profile that should use Polytropos, for example `hermes --profile <name> polytropos setup`. FreeLLMAPI and the programs are shared by the whole machine. Polytropos records which profiles use each shared part, and an uninstall from one profile removes a shared part only when no other profile uses it. In a second profile, `hermes polytropos install` adds the Hermes skills, rtk's Hermes plugin and the MCP entries that this profile lacks, and records them for this profile, so that its uninstall removes only those.
 
 ## What the doctor checks
 
@@ -82,7 +82,8 @@ A running gateway keeps the old plugin code until it restarts. Hermes prints `he
 
 - The Hermes version.
 - The pack plugins, against the commits pinned in `versions.lock` and the commit of the installed polytropos plugin.
-- Whether FreeLLMAPI answers on 127.0.0.1:3001, and in which mode Polytropos runs it.
+- Whether FreeLLMAPI answers on 127.0.0.1:3001, whether it accepts the profile's `FREELLMAPI_API_KEY`, and in which mode Polytropos runs it.
+- Whether the Node version fits FreeLLMAPI, unless FreeLLMAPI runs in external mode.
 - The router settings, cloud models with a window below Hermes's minimum of 64,000 tokens, and upstreams that do not answer.
 - A leftover `router:` section from Hermes's closed router pull request, which Polytropos ignores.
 - The pinned programs and their versions.
@@ -99,9 +100,9 @@ A running gateway keeps the old plugin code until it restarts. Hermes prints `he
 hermes polytropos update
 ```
 
-`update` reads the latest Polytropos release from GitHub, shows what would change and asks before it changes anything. It updates the plugins through the release's pack file, so Hermes shows its review screen again. Then it updates the programs, and FreeLLMAPI when Polytropos runs it. `hermes polytropos update programs` and `hermes polytropos update freellmapi` update one part only.
+`update` reads the latest Polytropos release from GitHub, shows what would change and asks before it changes anything. It updates the plugins through the release's pack file, so Hermes shows its review screen again. Then it brings ponytail and the programs to the versions of that release, and FreeLLMAPI as well when Polytropos runs it. `hermes polytropos update programs` and `hermes polytropos update freellmapi` update one part to the versions that the installed polytropos plugin pins, and fetch nothing from GitHub.
 
-Before a FreeLLMAPI update, Polytropos prints the installed tag, the new tag and a GitHub link that compares the two. It builds the new version next to the running one, stops the service, backs up the database and keys, starts the new version and checks it. When the check fails, it puts the backup and the old version back. To go back by hand later, run `hermes polytropos rollback freellmapi`. It asks first, because a rollback loses the changes made in FreeLLMAPI since the update.
+Before a FreeLLMAPI update, Polytropos prints the installed tag, the new tag and a GitHub link that compares the two. It builds the new version next to the running one, stops the service, backs up the database and keys, starts the new version and checks that it answers. Then stack-canary checks the tool calls of a cloud model from the router's routes. When a check fails, Polytropos puts the backup and the old version back. When the tool-call check cannot run, for example because stack-canary is not installed, update says why and keeps the new version. To go back by hand later, run `hermes polytropos rollback freellmapi`. It asks first, because a rollback loses the changes made in FreeLLMAPI since the update.
 
 Polytropos does not update anything until you run `update`.
 
@@ -111,28 +112,28 @@ Polytropos does not update anything until you run `update`.
 hermes polytropos uninstall
 ```
 
-Uninstall sets the settings that Polytropos changed back to their old values and undoes the integrations that `install` recorded, such as the Hermes skills and the context7 MCP entry. It removes the FreeLLMAPI service and the programs that Polytropos installed, once no other profile uses them. At the end it prints a `hermes plugins remove` command for each pack plugin. Run those yourself, then `hermes gateway restart`.
+Uninstall sets the settings that Polytropos changed in this profile back to their old values. That includes the `model` section that FreeLLMAPI's `setup-hermes` rewrote, so the model you used before the setup comes back. It also undoes the integrations that `install` recorded for this profile, such as the Hermes skills and the context7 MCP entry. It removes the FreeLLMAPI service and the programs that Polytropos installed, once no other profile uses them. At the end it prints a `hermes plugins remove` command for each pack plugin. Run those yourself, then `hermes gateway restart`. When a restore, an undo or a removal fails, uninstall exits with status 1 and keeps its record, so the next uninstall tries again.
 
 Some things stay.
 
 - FreeLLMAPI's database, the provider keys and the update backups, in `~/.local/share/polytropos/freellmapi`. `hermes polytropos uninstall --purge-data` deletes that folder after you type `yes`.
-- Programs that were on the machine before Polytropos.
+- Programs that were on the machine before Polytropos, and the skills and MCP entries that the profile had before the install.
 - Shared parts that another profile still uses.
 - A FreeLLMAPI that Polytropos did not install. Polytropos leaves it alone.
-- What FreeLLMAPI's `setup-hermes` wrote. It ran before Polytropos recorded any change, so after an uninstall the `FREELLMAPI_API_KEY` line is still in `.env` and Hermes's default model is FreeLLMAPI's own model. The model you used before the setup does not come back. If the uninstall removed FreeLLMAPI, choose another model with `hermes model`.
-- The FreeLLMAPI provider in OpenCode's own config, which FreeLLMAPI's `setup-opencode` added. Uninstall prints what to change there.
+- The `FREELLMAPI_API_KEY` line that FreeLLMAPI's `setup-hermes` wrote to the profile's `.env`.
+- The changes that FreeLLMAPI's `setup-opencode` made for OpenCode. It added the `freellmapi` provider and a default model to `~/.config/opencode/opencode.json`, and stored FreeLLMAPI's key under `freellmapi` in `~/.local/share/opencode/auth.json`. Uninstall prints both paths, and you change them by hand.
 - Polytropos's own files in `~/.local/state/polytropos`, `~/.cache/polytropos` and `~/.local/share/polytropos/canary`.
 
 ## What stays on this machine
 
 - In managed mode FreeLLMAPI listens on 127.0.0.1 only.
-- Provider keys stay in FreeLLMAPI's encrypted database, and the unified key in the profile's `.env`. Polytropos does not print or log key values.
+- Provider keys stay in FreeLLMAPI's encrypted database, and the unified key in the profile's `.env`. Polytropos does not print or log key values. When your `model` section held a key before the setup, `~/.local/state/polytropos/state.json` keeps a copy of that section, with mode 0600, until uninstall puts it back.
 - The router writes no message text to disk. Its traces are off by default. When you turn them on, they record the route and the model of each request without message text, in a file that only your user can read.
 - The classifier sends the last user message of each turn to the classifier model, which is FreeLLMAPI's `auto` model by default. With a cloud classifier that text reaches a cloud provider, also when the turn itself then runs on a local model.
 - `hermes polytropos canary run` only tests endpoints on this machine, and its results stay in `~/.local/share/polytropos/canary`.
 - The doctor's key-file check reads file names and permissions and does not open the files.
 - Programs are installed at the versions in `versions.lock`. The FreeLLMAPI checkout is checked against its pinned commit, and the rtk and macOS Ollama archives against their SHA-256.
-- Outside installs and updates, Polytropos contacts GitHub only for stack-canary's public results, at most once a day. `update` reads the latest release from GitHub. Installs and updates download from GitHub, npm and PyPI, and for Ollama on Linux from ollama.com.
+- Outside installs and updates, Polytropos contacts GitHub only for stack-canary's public results, at most once a day. `update` without a part reads the latest release from GitHub. Installs and updates download from GitHub, npm and PyPI, and for Ollama on Linux from ollama.com.
 
 ## WhatsApp pacing
 
@@ -154,7 +155,23 @@ python scripts/sync_shared.py --check
 python -m pytest -q -m "not e2e"
 ```
 
-CI runs these on Ubuntu and macOS with Python 3.11 and 3.13. Code that both plugins use lives in `shared/polytropos_shared/`. `scripts/sync_shared.py` copies it into each plugin's `_shared/` folder and copies `versions.lock` into the polytropos plugin, and `--check` exits with status 1 when a copy is out of date. The copies are committed, because Hermes installs a plugin folder straight from git. A test run refreshes them as well. Tests marked `e2e` need a real Hermes install and run only locally.
+CI runs these on Ubuntu and macOS with Python 3.11 and 3.13. Code that both plugins use lives in `shared/polytropos_shared/`. `scripts/sync_shared.py` copies it into each plugin's `_shared/` folder and copies `versions.lock` into the polytropos plugin, and `--check` exits with status 1 when a copy is out of date. The copies are committed, because Hermes installs a plugin folder straight from git. A test run refreshes them as well.
+
+### End-to-end tests
+
+The end-to-end tests in `tests/e2e` run the Hermes Agent from `~/.hermes/hermes-agent` in an isolated home under `.sandbox/e2e`, against fake OpenAI-compatible servers on loopback ports. They run on your own machine only, and CI leaves them out. Build their root once.
+
+```sh
+python scripts/hermes_sandbox.py build-root .sandbox/e2e
+```
+
+`build-root` runs one turn against a fake server. That first run in a new root prepares Hermes's own runtime there, which takes about 850 MB. Hermes installs its Python packages there with uv and fetches its plugin catalog and the models.dev data. Then run the tests.
+
+```sh
+POLYTROPOS_E2E=1 python -m pytest tests/e2e -q -rs
+```
+
+`-rs` prints why each skipped test was skipped. Without `POLYTROPOS_E2E=1` every test is skipped. A test also skips when the root is missing, when memory pressure is at warning or critical, or when less than 5 GiB of disk is free where the root lives. The launchd test runs on macOS only. On macOS each Hermes run starts a one-off launchd job for the sandbox gateway, and Hermes removes finished ones the next time it starts a gateway.
 
 How a release is made and how the weekly update job works is described in the maintainer section of the reference.
 
