@@ -304,6 +304,12 @@ def pack_install_writes(home, router_ref, seen):
     return effect
 
 
+def default_integrations(home):
+    """What rtk, graphify and ast-grep add to the default profile, so install and update find nothing missing."""
+    for folder in ("plugins/rtk", "skills/graphify", "skills/software-development/ast-grep"):
+        (home / folder).mkdir(parents=True, exist_ok=True)
+
+
 def managed_state(home):
     state = State()
     use_shared(state, "freellmapi", str(home), version="v0.16.36", installed_by_us=True)
@@ -355,6 +361,7 @@ def test_update_repairs_a_missing_pack_plugin_and_leaves_a_complete_home_alone(t
             "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW},
             "ponytail": {"source": "https://github.com/DietrichGebert/ponytail.git", "revision": "c" * 40}}
     (home / "plugins" / "ponytail").mkdir(parents=True)
+    default_integrations(home)
     meta_path = home / "plugins" / ".install-metadata.json"
     meta_path.write_text(json.dumps(meta))
     versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
@@ -415,6 +422,7 @@ def no_fetch(url):
 
 def test_update_programs_uses_the_installed_plugins_pins_and_fetches_nothing(tmp_home, monkeypatch):
     installed_lock(monkeypatch, tmp_home, new_lock_text())
+    default_integrations(tmp_home / ".hermes")
     run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
                             "ast-grep": LOCK["ast-grep"]["version"]})
     assert cli.handle(parse("update", "programs"), cli.Effects(run=run, fetch=no_fetch, ask=lambda q: "y")) == 0
@@ -594,6 +602,84 @@ def test_install_leaves_an_mcp_entry_that_was_there_before_unrecorded(tmp_home):
     run = FakeRun(on={("hermes", "mcp", "add"): mcp_added})
     assert cli.handle(parse("install", "--only", "context7"), cli.Effects(run=run, ask=no_questions)) == 0
     assert "config_changes" not in load_state().profiles.get(str(home), {})
+    assert not any(c[:3] == ["hermes", "mcp", "add"] for c in run.commands())  # Hermes would ask to overwrite it
+    assert yaml.safe_load((home / "config.yaml").read_text())["mcp_servers"]["context7"] == mine
+
+
+def test_hermes_commands_with_captured_output_get_no_terminal_input():
+    seen = []
+
+    def run(argv, **kw):
+        seen.append(kw)
+        return SimpleNamespace(returncode=0, stdout="Hermes Agent v0.23.2\n")
+
+    assert cli._hermes_version(cli.Effects(run=run)) == "0.23.2"
+    assert seen[0]["stdin"] is subprocess.DEVNULL  # a prompt fails at once instead of waiting unseen
+
+
+def test_install_sets_up_a_second_profile_and_uninstall_undoes_only_its_own(tmp_home, monkeypatch):
+    def skill_installed(argv):
+        (cli.hermes_home() / "skills" / Path(*argv[3].split("/")[1:])).mkdir(parents=True, exist_ok=True)
+
+    def mcp_added(argv):
+        config = {"mcp_servers": {argv[3]: {"command": argv[5]}}}
+        (cli.hermes_home() / "config.yaml").write_text(yaml.safe_dump(config))
+
+    on = {("hermes", "skills", "install"): skill_installed, ("hermes", "mcp", "add"): mcp_added}
+    first, second = tmp_home / ".hermes", tmp_home / ".hermes" / "profiles" / "work"
+    second.mkdir(parents=True)
+    names = ("install", "--only", "ast-grep", "context7")
+    assert cli.handle(parse(*names), cli.Effects(run=FakeRun(on=on), ask=no_questions)) == 0
+    monkeypatch.setenv("HERMES_HOME", str(second))
+    run = FakeRun(versions={"ast-grep": LOCK["ast-grep"]["version"],
+                            "context7-mcp": LOCK["optional"]["context7"]["version"]}, on=on)  # installed now
+    assert cli.handle(parse(*names), cli.Effects(run=run, ask=no_questions)) == 0
+    skill = ["hermes", "skills", "install", "official/software-development/ast-grep"]
+    assert run.commands() == [skill, ["hermes", "mcp", "add", "context7", "--command", "context7-mcp"]]
+    state = load_state()
+    assert state.profiles[str(second)] == {
+        "integrations": [{"ran": skill, "added": str(second / "skills" / "software-development" / "ast-grep")}],
+        "config_changes": [{"key": "mcp_servers.context7", "old": None, "new": {"command": "context7-mcp"}}]}
+    assert state.shared["ast-grep"]["profiles"] == state.shared["context7"]["profiles"] == [str(first), str(second)]
+    run = FakeRun()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands() == [["hermes", "config", "unset", "mcp_servers.context7"],
+                              ["hermes", "skills", "uninstall", "ast-grep", "--yes"]]  # the programs stay for first
+    assert str(second) not in load_state().profiles and len(load_state().profiles[str(first)]["integrations"]) == 1
+
+
+def missing(argv):
+    raise FileNotFoundError(f"[Errno 2] No such file or directory: {argv[0]!r}")
+
+
+def test_commands_that_cannot_start_are_reported_and_keep_the_state(tmp_home, capsys):
+    home = tmp_home / ".hermes"
+    home.mkdir()
+    assert cli.handle(parse("setup"), cli.Effects(run=FakeRun(on={("npx",): missing}), ask=no_questions)) == 1
+    assert "npx could not run: [Errno 2] No such file or directory: 'npx'" in capsys.readouterr().out
+
+    def written(argv):  # what `hermes config set` does
+        router = {"routes": {"complex": json.loads(argv[4])}}
+        (home / "config.yaml").write_text(yaml.safe_dump({"plugins": {"entries": {"polytropos-router": router}}}))
+
+    run = FakeRun(on={("hermes", "config", "set", R + "routes.complex"): written,
+                      ("hermes", "config", "set", R + "routes.simple"): missing})
+    assert cli.handle(parse("setup"), cli.Effects(run=run, ask=lambda q: "n")) == 1
+    out = capsys.readouterr().out
+    assert "Setting plugins.entries.polytropos-router.routes.simple failed" in out and "'hermes'" in out
+    assert [c["key"] for c in config_changes(load_state(), str(home))] == [R + "routes.complex"]
+    run = FakeRun(on={("hermes", "config"): missing})
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 1
+    assert f"Restoring {R}routes.complex failed" in capsys.readouterr().out
+    assert [c["key"] for c in config_changes(load_state(), str(home))] == [R + "routes.complex"]
+    run = FakeRun(on={("hermes", "plugins"): missing})
+    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", pack_text(), new_lock_text()), ask=lambda q: "y")
+    assert cli.handle(parse("update"), fx) == 1
+    out = capsys.readouterr().out
+    assert "No such file or directory: 'hermes'" in out and "The plugin update did not finish" in out
+    fx = cli.Effects(run=FakeRun(fail=[("npm",)]), ask=no_questions)
+    assert cli.handle(parse("install", "--only", "qmd"), fx) == 1
+    assert "qmd was not installed: Command '['npm', 'install', '-g'" in capsys.readouterr().out
 
 
 # --- setup ---

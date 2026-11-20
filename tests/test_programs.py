@@ -142,6 +142,14 @@ def test_install_runs_commands_in_order():
     assert calls == g.install_cmds
 
 
+def test_context7_mcp_step_gets_no_terminal_input():
+    c7 = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["context7"]
+    calls = []
+    P.install(c7, lambda cmd, **k: calls.append((cmd, k)) or proc())
+    [mcp] = [k for cmd, k in calls if cmd[:3] == ["hermes", "mcp", "add"]]
+    assert mcp["stdin"] is subprocess.DEVNULL and mcp["capture_output"]  # an overwrite prompt fails at once
+
+
 def test_context7_mcp_step_falls_back_to_manual(capsys):
     c7 = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["context7"]
 

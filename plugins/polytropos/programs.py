@@ -194,7 +194,8 @@ def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], N
     for cmd in p.install_cmds:
         if cmd[:3] == ["hermes", "mcp", "add"]:
             try:
-                ok = run(cmd, capture_output=True, text=True).returncode == 0
+                # No input: when Hermes asks before it overwrites an entry, the question fails at once.
+                ok = run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL).returncode == 0
             except FileNotFoundError:
                 ok = False
             if not ok:

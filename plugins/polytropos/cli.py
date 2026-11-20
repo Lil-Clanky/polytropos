@@ -135,11 +135,21 @@ def _value(value) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
+def _run(fx: Effects, command: list[str]) -> bool:
+    """Run a command and say whether it worked. A command that cannot start says why."""
+    try:
+        return fx.run(command, check=False).returncode == 0
+    except OSError as err:
+        print(f"{command[0]} could not run: {err}")
+        return False
+
+
 # --- doctor ---
 
 def _hermes_version(fx: Effects) -> str | None:
-    try:
-        out = fx.run(["hermes", "--version"], capture_output=True, text=True, timeout=30, check=False).stdout or ""
+    try:  # no input, so a question from Hermes fails at once instead of waiting unseen
+        out = fx.run(["hermes", "--version"], capture_output=True, text=True, timeout=30, check=False,
+                     stdin=subprocess.DEVNULL).stdout or ""
     except (OSError, subprocess.SubprocessError):
         return None
     match = re.search(r"\d+\.\d+\.\d+", out)
@@ -196,7 +206,7 @@ def _setup(args, fx: Effects) -> int:
         url = re.sub(r"/v1$", "", (_answer(fx, f"FreeLLMAPI URL [{url}]: ") or url).rstrip("/"))
         command += ["--url", url]
     model = _get(_read_config(home), "model")  # setup-hermes rewrites this block, the user's own key included
-    if fx.run(command, check=False).returncode != 0:
+    if not _run(fx, command):
         print("FreeLLMAPI's setup-hermes failed, so the router settings were not written.")
         return 1
     if (written := _get(_read_config(home), "model")) != model:  # before the keys below: uninstall restores it last
@@ -223,7 +233,7 @@ def _write_config(home: Path, state: State, changes: list[tuple[str, object]], f
         if old == new:
             continue
         command = ["hermes", "config", "set", key, _value(new)]
-        if fx.run(command, check=False).returncode != 0:
+        if not _run(fx, command):
             print(f"Setting {key} failed. Run this command yourself, then run hermes polytropos setup again:")
             print(f"  {shlex.join(command)}")
             return False
@@ -284,11 +294,20 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
     # Only what this install changes is recorded, so uninstall leaves the user's own setup alone.
     touched = [(command, target, _snapshot(target, home)) for command in p.install_cmds
                if (target := _added_by(command, home)) is not None]
+    existing = [c for c, t, old in touched if isinstance(t, str) and old is not None]  # Hermes would ask to overwrite
+    # The program serves the whole machine and its integrations belong to each profile, so a profile that lacks one
+    # gets it. graphify's skill goes to ~/.hermes whatever the profile, so another profile does not run it again.
+    lacking = [c for c, t, old in touched
+               if (old is None or old is False) and (isinstance(t, str) or t.is_relative_to(home))]
     try:
         before = programs.installed_version(p, fx.run)
         if programs.needs_install(p, fx.run):
-            programs.install(p, fx.run, download=fx.download)
+            programs.install(replace(p, install_cmds=[c for c in p.install_cmds if c not in existing]), fx.run,
+                             download=fx.download)
             print(f"{p.name} {p.version} is installed.")
+        elif lacking:
+            programs.install(replace(p, asset_url="", install_cmds=lacking), fx.run)
+            print(f"{p.name} is set up for this profile.")
     except (subprocess.CalledProcessError, OSError, ValueError) as err:
         print(f"{p.name} was not installed: {err}")
         return False
@@ -498,7 +517,7 @@ def _update(args, fx: Effects) -> int:
             pack_file = Path(tmp) / "hermes-pack.yaml"
             pack_file.write_text(pack_text)
             # Exit status 1 is expected on Hermes v0.23.2, where ponytail always fails; the own entries decide.
-            fx.run(["hermes", "plugins", "pack", "install", "--force", str(pack_file)], check=False)
+            _run(fx, ["hermes", "plugins", "pack", "install", "--force", str(pack_file)])
         left = [r.label for r in doctor.check_plugins(ctx) if r.status != "ok"]
         if left:
             print("The plugin update did not finish, so nothing else was updated:")
@@ -568,11 +587,7 @@ def _undo_integration(item: dict, home: Path, fx: Effects) -> bool:
         print(f"{shlex.join(ran)} added {added}, which is outside this profile. "
               "Remove it yourself if no other profile uses it.")
         return True
-    try:
-        done = fx.run(command, check=False).returncode == 0
-    except OSError:
-        done = False
-    if not done:
+    if not (done := _run(fx, command)):
         print(f"Undoing {shlex.join(ran)} failed. Run this command yourself: {shlex.join(command)}")
     return done
 
@@ -592,7 +607,7 @@ def _uninstall(args, fx: Effects) -> int:
         if _get(current, key) == old:
             continue
         command = ["hermes", "config", "unset", key] if old is None else ["hermes", "config", "set", key, _value(old)]
-        if fx.run(command, check=False).returncode != 0:
+        if not _run(fx, command):
             if isinstance(old, dict):  # a block such as model can hold an API key, which no output may show
                 print(f"Restoring {key} failed. Its old value stays recorded in {paths.state_dir() / 'state.json'}, "
                       "and the next hermes polytropos uninstall tries again.")
