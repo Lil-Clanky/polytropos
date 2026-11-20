@@ -57,12 +57,27 @@ This first pack install stops polytropos and prints the findings of Hermes's ins
 hermes plugins pack install --force polytropos/hermes-pack.yaml
 ```
 
-Then run the rest.
+Then run the doctor, which reports what is still missing.
 
 ```sh
 hermes polytropos doctor
+```
+
+Install the rest. Install asks before it installs ponytail and before each optional program.
+
+```sh
 hermes polytropos install
+```
+
+Add your provider keys in FreeLLMAPI's dashboard and copy its unified API key, as step 5 below explains. Setup asks for that key.
+
+```sh
 hermes polytropos setup
+```
+
+Run the doctor again. It can ask whether to make the router the default model.
+
+```sh
 hermes polytropos doctor
 ```
 

@@ -197,9 +197,10 @@ def total_ram_bytes(*, platform: str = sys.platform, run=subprocess.run, read_te
 
 
 def _tagged(name) -> str | None:
-    """Ollama reads a name without a tag as <name>:latest."""
+    """Ollama reads a name without a tag as <name>:latest. Case is ignored, so other capitals in a route still match."""
     if not isinstance(name, str):
         return None
+    name = name.lower()
     return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
 
 

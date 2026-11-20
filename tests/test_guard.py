@@ -216,6 +216,19 @@ def test_ollama_fit_reads_a_bare_name_as_latest_and_refuses_an_unpulled_model(ca
         assert guard.ollama_fit(fake.url, "notpulled", 8192, total_ram=ram) is None
 
 
+def test_ollama_fit_matches_names_without_regard_to_case():
+    info = {"llama.block_count": 28, "llama.attention.head_count_kv": 8, "llama.embedding_length": 3072, "llama.attention.head_count": 24}
+    routes = {
+        ("GET", "/api/ps"): (200, {"models": [{"name": "Loaded:Latest", "size": 10**9}]}),
+        ("GET", "/api/tags"): (200, {"models": [{"name": "qwen3:4b", "size": 2 * 10**9}]}),
+        ("POST", "/api/show"): (200, {"model_info": info}),
+    }
+    with Fake(routes) as fake:
+        ram = 16 * GB
+        assert guard.ollama_fit(fake.url, "loaded", 8192, total_ram=ram) is True  # capitals in Ollama's list
+        assert guard.ollama_fit(fake.url, "Qwen3:4B", 8192, total_ram=ram) is True  # capitals in the route entry
+
+
 def test_macos_pressure_level_3_is_warning_and_5_critical():
     assert mac_signals("3").pressure == "warning"
     assert mac_signals("8").pressure == "critical"
