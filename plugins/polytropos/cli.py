@@ -606,7 +606,10 @@ def _uninstall(args, fx: Effects) -> int:
         key, old = change["key"], change["old"]
         if _get(current, key) == old:
             continue
-        command = ["hermes", "config", "unset", key] if old is None else ["hermes", "config", "set", key, _value(old)]
+        # Without --force, Hermes refuses a block over the model block and puts a string into model.default.
+        force = ["--force"] if key == "model" else []
+        command = (["hermes", "config", "unset", key] if old is None
+                   else ["hermes", "config", "set", *force, key, _value(old)])
         if not _run(fx, command):
             if isinstance(old, dict):  # a block such as model can hold an API key, which no output may show
                 print(f"Restoring {key} failed. Its old value stays recorded in {paths.state_dir() / 'state.json'}, "

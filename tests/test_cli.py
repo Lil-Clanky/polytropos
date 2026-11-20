@@ -42,7 +42,8 @@ def probe(argv):
 
 class FakeRun:
     """Records argv. A probe prints versions[name] (the name without its folder) or raises FileNotFoundError.
-    A command that starts with a prefix in `fail` exits 1; `on` maps a prefix to a side effect."""
+    A command that starts with a prefix in `fail` exits 1; `on` maps a prefix to a side effect. As in Hermes v0.23.2
+    (hermes_cli/config_section_guard.py), setting the bare model key without --force exits 1 over a mapping."""
 
     def __init__(self, versions=None, fail=(), on=None):
         self.versions, self.fail, self.on, self.calls = versions or {}, fail, on or {}, []
@@ -58,7 +59,9 @@ class FakeRun:
         for prefix, effect in self.on.items():
             if argv[:len(prefix)] == list(prefix):
                 effect(argv)
-        code = 1 if any(argv[:len(p)] == list(p) for p in self.fail) else 0
+        guarded = argv[:4] == ["hermes", "config", "set", "model"] and isinstance(
+            cli._read_config(Path(os.environ["HERMES_HOME"])).get("model"), dict)  # never the real ~/.hermes
+        code = 1 if guarded or any(argv[:len(p)] == list(p) for p in self.fail) else 0
         if code and kw.get("check"):
             raise subprocess.CalledProcessError(code, argv)
         return SimpleNamespace(returncode=code, stdout="", stderr="")
@@ -490,7 +493,7 @@ def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     assert cmds.index(["hermes", "config", "set", "model.provider", "custom"]) < cmds.index(
         ["hermes", "config", "set", "model.base_url", "http://localhost:3001/v1"]) < cmds.index(
         ["hermes", "config", "unset", R + "routes.simple"]) < cmds.index(
-        ["hermes", "config", "set", "model", json.dumps(USER_MODEL)])  # the user's own block comes back last
+        ["hermes", "config", "set", "--force", "model", json.dumps(USER_MODEL)])  # the user's own block comes last
     assert ["npm", "uninstall", "-g", LOCK["optional"]["qmd"]["package"]] in cmds
     assert not any(c[:2] == ["uv", "tool"] for c in cmds)
     after = load_state()
@@ -616,9 +619,9 @@ def test_uninstall_exits_1_and_keeps_the_record_when_a_restore_fails(tmp_home, c
     record_config_change(state, str(home), "model", USER_MODEL, FREELLM_MODEL)
     record_config_change(state, str(home), "model.default", "free-model", "auto")
     save_state(state)
-    run = FakeRun(fail=[("hermes", "config", "set", "model")])
+    run = FakeRun(fail=[("hermes", "config", "set", "--force", "model")])
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 1
-    assert run.commands()[-1] == ["hermes", "config", "set", "model", json.dumps(USER_MODEL)]
+    assert run.commands()[-1] == ["hermes", "config", "set", "--force", "model", json.dumps(USER_MODEL)]
     out = capsys.readouterr().out
     assert "Restoring model failed" in out and USER_MODEL["api_key"] not in out  # a model block can hold a key
     assert config_changes(load_state(), str(home)) == [{"key": "model", "old": USER_MODEL, "new": FREELLM_MODEL}]
@@ -762,7 +765,20 @@ def test_setup_records_the_users_model_before_setup_hermes_rewrites_it(tmp_home)
     run = FakeRun()  # the fake config set changed nothing, so only the model block differs from its old value
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
     [restore] = run.commands()
-    assert restore[:4] == ["hermes", "config", "set", "model"] and json.loads(restore[4]) == USER_MODEL
+    assert restore[:5] == ["hermes", "config", "set", "--force", "model"] and json.loads(restore[5]) == USER_MODEL
+
+
+def test_uninstall_brings_back_a_model_that_was_a_string(tmp_home):
+    home = tmp_home / ".hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text(yaml.safe_dump({"model": "openrouter/some-model"}))
+    run = FakeRun(on={("npx",): setup_hermes_rewrites_model(home)})
+    assert cli.handle(parse("setup"), cli.Effects(run=run, ask=lambda q: "n")) == 0
+    assert config_changes(load_state(), str(home))[0] == {
+        "key": "model", "old": "openrouter/some-model", "new": FREELLM_MODEL}
+    run = FakeRun()  # without --force, Hermes would put the string into model.default and keep FreeLLMAPI's keys
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands() == [["hermes", "config", "set", "--force", "model", "openrouter/some-model"]]
 
 
 def test_setup_stops_at_a_failed_key_and_keeps_what_it_recorded(tmp_home, capsys):
