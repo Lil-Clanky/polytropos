@@ -89,28 +89,56 @@ def test_canary_run_command_exits_1_when_a_model_fails(tmp_home, fake_canary, mo
     assert canary.load_local_results()["freellmapi/big"] == "fail"
 
 
-def test_update_checks_the_first_cloud_model_with_the_canary(tmp_home, fake_canary, monkeypatch):
+class CheckingFreeLLM:
+    """Runs the update's check once the new release answers, as FreeLLM.update does, and rolls back on False."""
+
+    def __init__(self):
+        self.checks = []
+
+    def current_tag(self):
+        return "v0.16.35"
+
+    def update(self, pin, *, check=None):
+        self.checks.append(check())
+        if self.checks[-1]:
+            return UpdateResult(True, "v0.16.35", pin.tag, False, f"updated to {pin.tag}")
+        return UpdateResult(False, "v0.16.35", pin.tag, True, "health check failed; restored v0.16.35")
+
+
+def update_freellmapi(tmp_home, run=None):
+    """`hermes polytropos update freellmapi` on a managed FreeLLMAPI, answering yes. Returns (exit, the fake)."""
     write_router_config(tmp_home)
     state = State()
-    use_shared(state, "freellmapi", str(tmp_home / ".hermes"), version="v0.16.36", installed_by_us=True)
+    use_shared(state, "freellmapi", str(tmp_home / ".hermes"), version="v0.16.35", installed_by_us=True)
     set_mode(state, "freellmapi", "managed")
     save_state(state)
-    checks = []
-
-    class FakeFreeLLM:
-        def current_tag(self):
-            return "v0.16.35"
-
-        def update(self, pin, *, check=None):
-            checks.append(check())
-            return UpdateResult(True, "v0.16.36", pin.tag, False, f"updated to {pin.tag}")
-
-    lock = (cli._repo_file("versions.lock")).read_text()
-    urls = {cli.RELEASE_API: b'{"tag_name": "v0.2.0"}', f"{cli.RAW}/v0.2.0/hermes-pack.yaml": b"plugins: []\n",
-            f"{cli.RAW}/v0.2.0/versions.lock": lock.encode()}
-    fx = cli.Effects(fetch=urls.__getitem__, ask=lambda q: "y", freellm=FakeFreeLLM())
+    fl = CheckingFreeLLM()
+    fx = cli.Effects(fetch=lambda url: pytest.fail(f"fetched {url}"), ask=lambda q: "y", freellm=fl)
+    if run is not None:
+        fx.run = run
     parser = argparse.ArgumentParser()
     cli.setup_parser(parser)
-    assert cli.handle(parser.parse_args(["update", "freellmapi"]), fx) == 0
-    assert checks == [True]
+    return cli.handle(parser.parse_args(["update", "freellmapi"]), fx), fl
+
+
+def test_update_checks_the_first_cloud_model_with_the_canary(tmp_home, fake_canary):
+    code, fl = update_freellmapi(tmp_home)
+    assert code == 0 and fl.checks == [True]
     assert [a for a in fake_canary()[0]["argv"] if a in ("auto", "big")] == ["auto"]
+
+
+def test_update_stands_when_stack_canary_is_missing_and_says_why(tmp_home, capsys):
+    def no_canary(argv, **kw):
+        raise FileNotFoundError(argv[0])
+
+    code, fl = update_freellmapi(tmp_home, run=no_canary)
+    out = capsys.readouterr().out
+    assert code == 0 and fl.checks == [True] and "FreeLLMAPI: updated to" in out
+    assert "stack-canary is not installed" in out and "hermes polytropos install" in out
+    assert "The tool-call check was skipped" in out
+
+
+def test_update_rolls_back_when_the_canary_fails(tmp_home, fake_canary, monkeypatch, capsys):
+    monkeypatch.setenv("FAKE_CANARY_FAIL", "auto")
+    code, fl = update_freellmapi(tmp_home)
+    assert code == 1 and fl.checks == [False] and "restored v0.16.35" in capsys.readouterr().out

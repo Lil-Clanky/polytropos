@@ -98,10 +98,10 @@ def install_records(hermes_home: Path) -> dict:
     return {_repo_subdir(str(r.get("source") or "")): (name, r) for name, r in metadata.items() if isinstance(r, dict)}
 
 
-def _git_head(ctx: DoctorContext, folder: Path) -> str:
+def _git_head(run: Callable, folder: Path) -> str:
     try:
-        return ctx.run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True,
-                       check=False).stdout.strip()
+        return run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True,
+                   check=False).stdout.strip()
     except OSError:  # git is not installed
         return ""
 
@@ -122,7 +122,7 @@ def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
         folder = ctx.hermes_home / "plugins" / entry.get("name", "")
         if key not in installed and entry.get("name") and (folder / ".git").exists():
             # programs.ponytail_fallback clones without Hermes's installer, which leaves no record
-            installed[key] = (entry["name"], {"revision": _git_head(ctx, folder)})
+            installed[key] = (entry["name"], {"revision": _git_head(ctx.run, folder)})
         if key not in installed or not pinned:
             results.append(CheckResult("fail", f"plugin {label} is not installed", fix="hermes polytropos update"))
             continue

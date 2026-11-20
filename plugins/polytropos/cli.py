@@ -309,6 +309,25 @@ def _ponytail(home: Path, lock: dict, fx: Effects) -> bool:
     return True
 
 
+def _move_ponytail(home: Path, lock: dict, fx: Effects) -> bool:
+    """Move a clone that programs.ponytail_fallback made, which Hermes keeps no record of, to the lock's commit."""
+    pin, folder = lock["plugins"]["ponytail"], home / "plugins" / "ponytail"
+    try:
+        recorded = doctor._repo_subdir(pin["repo"]) in doctor.install_records(home)
+    except (OSError, ValueError):  # unreadable records: the doctor reports them, and the clone stays as it is
+        return True
+    if recorded or not (folder / ".git").exists() or doctor._git_head(fx.run, folder) == pin["commit"]:
+        return True
+    try:
+        for step in (["fetch", "--depth", "1", "origin", pin["commit"]], ["checkout", pin["commit"]]):
+            fx.run(["git", "-C", str(folder), *step], check=True)
+    except (subprocess.CalledProcessError, OSError) as err:
+        print(f"ponytail was not moved to {pin['commit'][:7]}: {err}")
+        return False
+    print(f"ponytail is now at {pin['commit'][:7]}.")
+    return True
+
+
 def _install(args, fx: Effects) -> int:
     lock = _lock()
     if lock is None:
@@ -345,9 +364,11 @@ def _install(args, fx: Effects) -> int:
             if fl.services.path().exists():  # also after a late failure, so the service is not taken for external
                 _own_freellmapi(state, profile, pin.tag)
         save_state(state)
-    if (not only or "ponytail" in only) and not (home / "plugins" / "ponytail").is_dir() and (
-            "ponytail" in only or _yes(fx, "ponytail is not installed. Install it from its pinned commit?")):
-        failed += not _ponytail(home, lock, fx)
+    if not only or "ponytail" in only:
+        if (home / "plugins" / "ponytail").is_dir():
+            failed += not _move_ponytail(home, lock, fx)
+        elif "ponytail" in only or _yes(fx, "ponytail is not installed. Install it from its pinned commit?"):
+            failed += not _ponytail(home, lock, fx)
     for p in progs:
         chosen = p.name in only if only else not p.optional or args.all_optional or _yes(fx, f"Install {p.name}?")
         if chosen and not _install_program(p, state, profile, fx):
@@ -394,24 +415,33 @@ def _update_programs(lock: dict, state: State, profile: str, fx: Effects) -> int
     return sum(not _install_program(p, state, profile, fx) for p in chosen)
 
 
-def _canary_check(fx: Effects) -> Callable[[], bool] | None:
-    """The update's extra health check: the tool checks pass on the first cloud model stack-canary can reach."""
-    try:
-        cfg, _ = doctor._router().load_config(hermes_home())
-    except ImportError:  # the router plugin is not installed
-        return None
-    slot = next((s for slots in cfg.routes.values() for s in slots
-                 if not cfg.upstreams[s.upstream].local and _loopback(cfg.upstreams[s.upstream].base_url)), None)
-    if slot is None:
-        return None
-    return lambda: run_canary(cfg, run=fx.run, models=[slot.model]).get(f"{slot.upstream}/{slot.model}") == "pass"
+def _canary_check(fx: Effects) -> Callable[[], bool]:
+    """The update's extra health check, run once the new release answers on /v1/models: stack-canary's tool checks
+    on the first cloud model it can reach. Only a fail result rolls the update back. A check that cannot run says
+    why and lets the update stand."""
+    def check() -> bool:
+        try:
+            cfg, _ = doctor._router().load_config(hermes_home())
+        except ImportError:  # the router plugin is not installed
+            cfg = None
+        slot = cfg and next((s for slots in cfg.routes.values() for s in slots
+                             if not cfg.upstreams[s.upstream].local and _loopback(cfg.upstreams[s.upstream].base_url)),
+                            None)
+        if not slot:
+            print("The tool-call check was skipped: the router has no cloud model on this machine to test.")
+            return True
+        verdict = run_canary(cfg, run=fx.run, models=[slot.model]).get(f"{slot.upstream}/{slot.model}")
+        if verdict is None:  # run_canary said why
+            print("The tool-call check was skipped, so the update stands.")
+        return verdict != "fail"
+    return check
 
 
 def _update_freellmapi(lock: dict, state: State, profile: str, fx: Effects) -> int:
     pin = _pin(lock)
     mode = state.shared.get("freellmapi", {}).get("mode")
     if mode != "managed":
-        print(f"FreeLLMAPI does not run as the Polytropos service. This release pins {pin.tag}; update it yourself."
+        print(f"FreeLLMAPI does not run as the Polytropos service. Polytropos pins {pin.tag}; update it yourself."
               if mode == "external" else "FreeLLMAPI is not installed. Run hermes polytropos install first.")
         return 0
     result = fx.fl().update(pin, check=_canary_check(fx))
@@ -423,37 +453,40 @@ def _update_freellmapi(lock: dict, state: State, profile: str, fx: Effects) -> i
 
 
 def _update(args, fx: Effects) -> int:
-    try:
-        tag, pack_text, lock = _release(fx)
-        pack = safe_load(pack_text) or {}
-        own = [e for e in pack.get("plugins", []) if doctor._repo_subdir(str(e["repo"]))[0] == OWN_REPO]
-        names = {doctor._repo_subdir(str(e["repo"])): name for name, e in lock.get("plugins", {}).items()}
-        # The lock's name lets the check find a plugin that programs.ponytail_fallback cloned without a record.
-        others = [{**e, "name": names.get(doctor._repo_subdir(str(e["repo"])), "")}
-                  for e in pack.get("plugins", []) if e not in own]
-    except Exception as err:  # network, JSON, TOML or YAML errors
-        print(f"Could not read the latest Polytropos release from GitHub: {err}")
-        return 1
     home, state, everything = hermes_home(), load_state(), args.component == "all"
-    profile = str(home)
-    ctx = doctor.DoctorContext(home, Path.home(), sys.platform, lock, {"plugins": own}, fx.run, fx.http_get, None)
-    changes = []
-    if everything:  # a new release changes the own plugins; a pack plugin that is not installed is repaired alike
+    profile, tag, pack_text, changes = str(home), "", "", []
+    if everything:  # the latest release: its plugins first, then programs and FreeLLMAPI from its lock
+        try:
+            tag, pack_text, lock = _release(fx)
+            pack = safe_load(pack_text) or {}
+            own = [e for e in pack.get("plugins", []) if doctor._repo_subdir(str(e["repo"]))[0] == OWN_REPO]
+            names = {doctor._repo_subdir(str(e["repo"])): name for name, e in lock.get("plugins", {}).items()}
+            # The lock's name lets the check find a plugin that programs.ponytail_fallback cloned without a record.
+            others = [{**e, "name": names.get(doctor._repo_subdir(str(e["repo"])), "")}
+                      for e in pack.get("plugins", []) if e not in own]
+        except Exception as err:  # network, JSON, TOML or YAML errors
+            print(f"Could not read the latest Polytropos release from GitHub: {err}")
+            return 1
+        ctx = doctor.DoctorContext(home, Path.home(), sys.platform, lock, {"plugins": own}, fx.run, fx.http_get, None)
+        # A new release changes the own plugins; a pack plugin that is not installed is repaired alike.
         changes = [r.label for r in doctor.check_plugins(ctx) if r.status != "ok"]
         changes += [r.label for r in doctor.check_plugins(replace(ctx, pack={"plugins": others})) if r.status == "fail"]
-    print(f"The latest Polytropos release is {tag}.")
-    for label in changes:
-        print(f"  changes: {label}")
-    what = {"all": "the plugins, programs and FreeLLMAPI", "programs": "the programs", "freellmapi": "FreeLLMAPI"}
-    question = f"Update {what[args.component]} to the versions of {tag}?"
+        print(f"The latest Polytropos release is {tag}.")
+        for label in changes:
+            print(f"  changes: {label}")
+    elif (lock := _lock()) is None:  # the installed plugin's own pins, which install and the doctor read too
+        return 1
     managed = state.shared.get("freellmapi", {}).get("mode") == "managed"
     old = fx.fl().current_tag() if managed and args.component != "programs" else ""
     new = _pin(lock).tag
     if old == new and args.component == "freellmapi":
         print(f"FreeLLMAPI is already on {new}.")
         return 0
+    question = {"all": f"Update the plugins, programs and FreeLLMAPI to the versions of {tag}?",
+                "programs": "Update the programs to the versions Polytropos pins?",
+                "freellmapi": f"Update FreeLLMAPI to {new}?"}[args.component]
     if old and old != new:  # FreeLLMAPI keeps no changelog file, so GitHub's comparison stands in for it
-        print(f"FreeLLMAPI {old} is installed, and Polytropos {tag} pins FreeLLMAPI {new}.")
+        print(f"FreeLLMAPI {old} is installed, and Polytropos{' ' + tag if tag else ''} pins FreeLLMAPI {new}.")
         print(f"What changed in FreeLLMAPI: {REPO_URL.removesuffix('.git')}/compare/{old}...{new}")
         if args.component == "freellmapi":
             question = f"Update FreeLLMAPI from {old} to {new}?"
@@ -473,8 +506,9 @@ def _update(args, fx: Effects) -> int:
                 print(f"  {label}")
             return 1
     failed = 0
-    if everything and not (home / "plugins" / "ponytail").is_dir():
-        failed += not _ponytail(home, lock, fx)
+    if everything:  # after the plugins
+        moved = (home / "plugins" / "ponytail").is_dir()
+        failed += not (_move_ponytail(home, lock, fx) if moved else _ponytail(home, lock, fx))
     if args.component in ("programs", "all"):
         failed += _update_programs(lock, state, profile, fx)
     if args.component in ("freellmapi", "all"):
@@ -652,6 +686,14 @@ def run_canary(cfg: "RouterConfig", *, run=subprocess.run, models: list[str] | N
             argv += ["--attempts", "1", "--summary-json", str(summary)]
             try:
                 run(argv, check=False, cwd=tmp)
+            except FileNotFoundError:
+                print("stack-canary is not installed, so nothing was tested. "
+                      "Install it with: hermes polytropos install")
+                break
+            except OSError as err:  # there but not runnable
+                print(f"stack-canary gave no result for {up.name}: {err}")
+                continue
+            try:
                 rows = [r for r in json.loads(summary.read_text())["results"] if isinstance(r, dict)]
             except (OSError, ValueError, KeyError, TypeError) as err:
                 print(f"stack-canary gave no result for {up.name}: {err}")
