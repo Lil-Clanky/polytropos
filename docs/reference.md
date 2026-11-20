@@ -44,20 +44,20 @@ In a chat, `/polytropos` shows the same as `status`.
 |---|---|
 | Hermes | A `fail` when `hermes --version` shows no version. A `warn` for any version other than 0.23.2. |
 | Plugins | Compares Hermes's install records in `~/.hermes/plugins/.install-metadata.json` with the expected plugins. ponytail and superpowers are expected at their commits in `versions.lock`. polytropos and polytropos-router are expected at the commit in Hermes's install record of the polytropos plugin. Without that record, as when the plugin runs from a checkout, both count as not installed. A ponytail cloned by `install` has no install record, so the doctor reads its commit with git. A missing plugin is a `fail` with the fix `hermes polytropos update`, and a plugin at another commit is a `warn`. |
-| FreeLLMAPI | Whether something answers on 127.0.0.1:3001 and whether it is FreeLLMAPI. Nothing on the port, or another program on it, is a `fail`. Then the doctor asks `/v1/models` with the profile's `FREELLMAPI_API_KEY` and never prints the key. A profile without the key, and a key that FreeLLMAPI refuses with 401, are a `warn` with the fix `hermes polytropos setup`. Any other status but 200 is a `warn` that names the status. The `ok` line shows the tag pinned in `versions.lock` and the mode Polytropos runs FreeLLMAPI in. |
+| FreeLLMAPI | Whether something answers on 127.0.0.1:3001 and whether it is FreeLLMAPI. Nothing on the port, or another program on it, is a `fail`. Then the doctor asks `/v1/models` with the profile's `FREELLMAPI_API_KEY` and never prints the key. A profile without the key, and a key that FreeLLMAPI refuses with 401, are a `warn` with the fix `hermes polytropos setup`. Any other result is a `warn`. It names the HTTP status when FreeLLMAPI returned one, and otherwise says that FreeLLMAPI did not answer. The `ok` line shows the mode Polytropos runs FreeLLMAPI in, and in managed mode also the tag of the installed release. |
 | Node | `node --version` against FreeLLMAPI's range `>=20.18.0 <25.0.0`. A Node outside the range, or no Node, is a `fail` that says to install Node 22 or 24. In external mode it is an `info`, because Polytropos does not run FreeLLMAPI then. |
-| Router | Each error in the `polytropos-router` settings is a `fail`. A cloud model whose window is below 64,000 tokens, and an upstream that does not answer on `<base_url>/models`, are a `warn`. |
+| Router | Each error in the `polytropos-router` settings is a `fail`. A cloud model whose window is below 64,000 tokens, and an upstream that does not answer on `<base_url>/models`, are a `warn`. A local upstream whose `/api/version` does not answer as Ollama gets an `info` line. The fit check covers Ollama only, so such an upstream gets the memory, swap and disk checks without it. |
 | Old router section | An `info` when `config.yaml` has a top-level `router:` section, as written by Hermes's closed router pull request. Polytropos ignores that section. |
-| Programs | The pinned programs that are present at their version, as one `ok` line. A missing default program or one at another version is a `warn`, and a missing optional program is an `info`. rtk is checked at `~/.local/bin/rtk`, so another rtk on the `PATH` does not count. stack-canary has no version flag, so it counts as present at its pinned commit when `canary run --help` works. Ollama only has to be present. |
+| Programs | The pinned programs that are present at their version, as one `ok` line with the version the doctor read for each. A missing default program or one at another version is a `warn`, and a missing optional program is an `info`. rtk is checked at `~/.local/bin/rtk`, so another rtk on the `PATH` does not count. stack-canary has no version flag. It counts as present at its pin when `canary run --help` works and the commit that `install` recorded in `state.json` is the pinned commit, and its line shows that commit. A stack-canary that runs without such a record is a `warn` that its commit is unknown. Ollama only has to be present, and its line shows the version found. |
 | Canary | For each local model with `runtime: ollama` in the routes, the stack-canary verdict for the installed Ollama version. A failed tool check is a `warn` that names an Ollama version that passes, when the matrix has one. No verdict is an `info`. Each model that failed `canary run` is a `warn` as well. |
-| Fit | Only on machines with 16 GB of RAM or less. A `warn` for each local model whose name says it has more than 3B parameters, such as the `8b` in `llama3.1:8b`, or whose upstream has a window above 8192 tokens. |
+| Fit | Only on machines with 16 GB of RAM or less. A `warn` for each local model whose name says it has more than 3B parameters, such as the `8b` in `llama3.1:8b`, or whose upstream has a window above 8192 tokens. The warning adds that such a window serves short requests without tools, and that an agent turn with Hermes's default tools needs a window of about 20,000 tokens by the router's estimate. See [Window fit](#window-fit). |
 | Key files | A `warn` per folder for files in `~/Downloads`, `~/Desktop` and `~` whose names match `*key*.json`, `*keys*.json`, `*.env.bak`, `.env.backup*` or `*.env.backup*`. It lists names and permissions and does not open the files. |
 | Profiles | An `info` for each profile in `~/.hermes/profiles/`, saying whether Polytropos is installed there. |
 | ponytail | An `info` when ponytail is installed. ponytail adds text to every turn, which costs tokens in gateway chats. Setting `PONYTAIL_DEFAULT_MODE=off` in the gateway's environment turns it off there. Polytropos does not change that setting. |
 | superpowers | An `info` when superpowers is installed. Whether its bootstrap still works after a context compaction is not verified on Hermes v0.23.2. |
 | Sleep | Only on macOS with a Hermes gateway LaunchAgent (`~/Library/LaunchAgents/ai.hermes.gateway*.plist`). A `warn` when `pmset -g` shows a sleep timer, with `sudo pmset -a sleep 0` as the fix for you to run. |
 
-When no check fails and `model.provider` in `config.yaml` is not `polytropos-router`, the doctor asks `Make the Polytropos router the default model (provider polytropos-router, model auto)? [y/N]`. A yes sets `model.provider` to `polytropos-router` and `model.default` to `auto`, records both changes for uninstall and prints `The Polytropos router is now the default model.` Without a terminal the doctor prints `To make the Polytropos router the default model, run: hermes polytropos setup`.
+When no check fails, `model.provider` in `config.yaml` is not `polytropos-router` and the profile has `FREELLMAPI_API_KEY`, the doctor asks `Make the Polytropos router the default model (provider polytropos-router, model auto)? [y/N]`. A yes sets `model.provider` to `polytropos-router` and `model.default` to `auto`, removes `model.context_length` as [setup](#setup) does, records the changes for uninstall and prints `The Polytropos router is now the default model.` Without the key, and without a terminal, the doctor prints `To make the Polytropos router the default model, run: hermes polytropos setup`.
 
 ### setup
 
@@ -66,7 +66,7 @@ When no check fails and `model.provider` in `config.yaml` is not `polytropos-rou
 1. It reads the `model` section of the profile's `config.yaml`.
 2. It runs FreeLLMAPI's `setup-hermes`. When Polytropos runs FreeLLMAPI, that is the CLI of the installed release, `node ~/.local/share/polytropos/freellmapi/current/cli/dist/index.js setup-hermes`. Otherwise it is `npx freellmapi@<cli_version> setup-hermes`, with `cli_version` from `versions.lock`. In external mode setup first asks `FreeLLMAPI URL [http://127.0.0.1:3001]: ` and passes the answer with `--url`. `setup-hermes` asks for FreeLLMAPI's unified API key, writes it as `FREELLMAPI_API_KEY` to `~/.hermes/.env`, and rewrites the `model` section of `config.yaml` so that FreeLLMAPI's model is the default (`provider: custom`). When the section changed, setup records the section from step 1 as one change with the key `model`, or records that there was none.
 3. It asks `Make the Polytropos router the default model (provider polytropos-router, model auto)? [y/N]`.
-4. It writes the router settings with `hermes config set`, in this order, so that the settings parse after each step. After a yes it also sets `model.provider` to `polytropos-router` and `model.default` to `auto`.
+4. It writes the router settings with `hermes config set`, in this order, so that the settings parse after each step. After a yes it also sets `model.provider` to `polytropos-router` and `model.default` to `auto`, and removes `model.context_length` with `hermes config unset`. FreeLLMAPI's `setup-hermes` writes that key, and Hermes v0.23.2 uses a configured `model.context_length` over the window that the provider reports (`agent/agent_init.py:1554-1598` and `agent/model_metadata.py:2218-2220` in Hermes's source). Left in place, it would replace the window that the router reports, see [Context window reported to Hermes](#context-window-reported-to-hermes).
 
 | Key | Value |
 |---|---|
@@ -75,7 +75,7 @@ When no check fails and `model.provider` in `config.yaml` is not `polytropos-rou
 | `plugins.entries.polytropos-router.classifier` | `freellmapi/auto` |
 | `plugins.entries.polytropos-router.upstreams.freellmapi` | `{"base_url": "<FreeLLMAPI URL>/v1", "api_key_env": "FREELLMAPI_API_KEY"}` |
 
-Setup records every value it changes, with the old value, in `state.json`. When a key changes twice, the first old value stays. A key that already has the new value is skipped. `hermes config set model.provider` removes `model.base_url` and `model.api_mode` when they belonged to the previous provider, so setup records their old values as well, and uninstall restores them. When a `hermes config set` fails, setup stops and prints the command, so you can run it yourself and then run setup again. Setup exits with status 1 when `setup-hermes` or a write fails, and prints `The router settings are written.` when it is done.
+Setup records every value it changes, with the old value, in `state.json`. A key that it removes is recorded the same way, so uninstall sets it back. When a key changes twice, the first old value stays. A key that already has the new value is skipped, and so is a key to remove that is not there. `hermes config set model.provider` removes `model.base_url` and `model.api_mode` when they belonged to the previous provider, so setup records their old values as well, and uninstall restores them. When a `hermes config set` or `hermes config unset` fails, setup stops with `Setting <key> failed` or `Removing <key> failed` and prints the command, so you can run it yourself and then run setup again. Setup exits with status 1 when `setup-hermes` or a write fails, and prints `The router settings are written.` when it is done.
 
 ### install
 
@@ -104,11 +104,11 @@ When a part fails, install goes on with the next one and exits with status 1 at 
 
 - Stop the old server first. adopt refuses while port 3001 answers.
 - adopt refuses when `~/.local/share/polytropos/freellmapi/data/` already holds FreeLLMAPI data. Clear that folder by hand first.
-- It checks Node before it copies anything, so a failed adopt can be run again.
+- It checks the port, the data folder and Node before it copies anything, so an adopt that stops at one of these checks can be run again.
 - It copies `server/data/freeapi.db` with its `-wal` and `-shm` files, `server/data/.encryption-key` and the checkout's `.env` into the data folder, and gives the key files mode 0600.
-- Then it builds the pinned tag and starts the service the way `install` does, and records managed mode.
+- Then it builds the pinned tag and starts the service the way `install` does, and records managed mode. When the build fails, or the service does not answer, the copied files stay in `data/`, and adopt refuses to run again while they are there. Remove them by hand before you run adopt again. The old checkout keeps its own data, because adopt copies it.
 
-The old checkout stays as it is. A launchd job or systemd unit that started the old server is not disabled. Disable it yourself, so it does not start the old server again.
+When port 3001 still answers, adopt prints how to stop the old FreeLLMAPI and keep it from starting again. On macOS it shows `launchctl list | grep -i freellm` to find the label of a launchd job, then `launchctl bootout gui/$(id -u)/<label>` and `launchctl disable gui/$(id -u)/<label>`. On Linux it shows `systemctl --user disable --now <unit>`. When a terminal or a dashboard runs the old server, stop it there. adopt never stops or disables anything itself. The old checkout stays as it is.
 
 ### update
 
@@ -116,10 +116,10 @@ The old checkout stays as it is. A launchd job or systemd unit that started the 
 
 1. With `all`, update reads the latest release from `https://api.github.com/repos/Lil-Clanky/polytropos/releases/latest`, then fetches `hermes-pack.yaml` and `versions.lock` at that tag from `https://raw.githubusercontent.com/Lil-Clanky/polytropos/<tag>/`. It prints `The latest Polytropos release is <tag>.` and lists each own plugin that is not at the release's commit, and each other pack plugin that is not installed.
 2. When Polytropos runs FreeLLMAPI and the pinned tag differs from the installed one, update prints both tags and `https://github.com/tashfeenahmed/freellmapi/compare/<installed tag>...<new tag>`. `update programs` skips this. When FreeLLMAPI is already on the pinned tag, `update freellmapi` prints `FreeLLMAPI is already on <tag>.` and stops.
-3. It asks `Update the plugins, programs and FreeLLMAPI to the versions of <tag>? [y/N]`. With `programs` it asks `Update the programs to the versions Polytropos pins? [y/N]`. With `freellmapi` it asks `Update FreeLLMAPI to <tag>? [y/N]`, or `Update FreeLLMAPI from <installed tag> to <new tag>? [y/N]` when Polytropos runs another tag. Any answer other than yes prints `Nothing changed.`
+3. When step 4 will reinstall plugins, update prints `Update reinstalls the plugins with --force, so Hermes also installs a plugin with a caution verdict from its scan without printing the findings, and a dangerous verdict still stops the plugin.` Then it asks `Update the plugins, programs and FreeLLMAPI to the versions of <tag>? [y/N]`. With `programs` it asks `Update the programs to the versions Polytropos pins? [y/N]`. With `freellmapi` it asks `Update FreeLLMAPI to <tag>? [y/N]`, or `Update FreeLLMAPI from <installed tag> to <new tag>? [y/N]` when Polytropos runs another tag. Any answer other than yes prints `Nothing changed.`
 4. With `all` and a plugin from step 1, it runs `hermes plugins pack install --force <pack file>` in the same terminal, because Hermes asks for `y` at its review screen. `--force` reinstalls the plugins that are installed already. It also makes Hermes accept a caution verdict of its install scan without printing the findings, and a dangerous verdict still stops the plugin. `hermes plugins pack install` without `--force`, or `hermes plugins install` of one plugin, shows the findings. See [Hermes v0.23.2 notes](#hermes-v0232-notes). Update ignores the exit status, because the ponytail entry always fails on Hermes v0.23.2, and checks its own two plugins afterwards instead. When they are not at the release's commit, update stops with status 1 and changes nothing else.
-5. With `all`, it installs ponytail the way `install` does when `~/.hermes/plugins/ponytail` is missing. When that folder is a clone without a Hermes install record and at another commit, update moves the clone to the release's pin with `git fetch --depth 1` and `git checkout`, as `install` does.
-6. With `all` or `programs`, it installs the pinned versions of the default programs and of the optional programs that `install` recorded for this profile. Like `install`, it also adds the skills, rtk's Hermes plugin and the MCP entries that this profile lacks.
+5. With `all`, when `~/.hermes/plugins/ponytail` is missing, it asks `ponytail is not installed. Install it from its pinned commit? [y/N]` and after a yes installs ponytail the way `install` does. When that folder is a clone without a Hermes install record and at another commit, update moves the clone to the release's pin with `git fetch --depth 1` and `git checkout`, as `install` does.
+6. With `all` or `programs`, it installs the pinned versions of the default programs and of the optional programs that `install` recorded for this profile. Update adds no Hermes skill, rtk Hermes plugin or MCP entry that this profile lacks, so one that you removed stays removed. `hermes polytropos install` adds them.
 7. With `all` or `freellmapi`, it updates FreeLLMAPI when Polytropos runs it. In external mode it prints the pinned tag and leaves the update to you, and when FreeLLMAPI is not installed it says to run `hermes polytropos install` first. See [Updates and backups](#updates-and-backups).
 8. When the plugins changed, it prints `Restart the gateway to load the new plugin code: hermes gateway restart`.
 
@@ -189,9 +189,9 @@ Once a model has answered, later requests in the same turn try it first.
 
 The router checks the window of local models only. It estimates the size of a request in tokens as the length of the request's messages and tool definitions written as JSON, divided by 3. To that it adds the request's `max_tokens`, or 1024 when the request has none. A local model gets the request when this sum is at most the `context_window` of its upstream. A local upstream without `context_window` gets no requests. The code is `_candidates` and `_usable` in `plugins/polytropos_router/client.py`, with the estimate in `tokens.py`.
 
-Hermes v0.23.2 sends the agent's `max_tokens` with a request only when it is set, and it is unset by default. The router's provider profile sets no output limit of its own. A normal turn therefore reaches the router without `max_tokens`, and the check counts 1024 output tokens. The router forwards the request with only `model` changed, so the model gets no `max_tokens` either. When Hermes retries a request, for example after a reply was cut off or an output limit was too large, it can set a one-time `max_tokens`, and the check counts that value.
+Hermes v0.23.2 has no setting for the output limit. Its provider guide says that it no longer reads `model.max_tokens`, `HERMES_MAX_TOKENS` or provider output-cap settings (`website/docs/integrations/providers.md` in Hermes's source), and the router's provider profile sets no output limit of its own. A normal turn therefore reaches the router without `max_tokens`, and the check counts the router's default of 1024 output tokens (`client.py`). The router forwards the request with only `model` changed, so the model gets no `max_tokens` either. When Hermes retries a request, for example after a reply was cut off or an output limit was too large, it can set a one-time `max_tokens`, and the check counts that value.
 
-With `context_window: 8192`, a request fits when its estimate is at most 7168 tokens, which is about 21,500 characters of JSON. Hermes's system prompt and tool definitions count toward that, so a turn that offers many tools may not fit, and then the next model in the chain gets it.
+With `context_window: 8192`, a request fits when its estimate is at most 7168 tokens, which is about 21,500 characters of JSON. Hermes's system prompt and tool definitions count toward that. Hermes's prompt-surface test fixture (`tests/fixtures/prompt_surface/surfaces.json` in Hermes's source) puts a default turn with tools at about 12,000 tokens before any history, which the router's estimate counts as about 16,000. With the 1024 output tokens and the conversation's history on top, an agent turn with Hermes's default tools needs a window of about 20,000 tokens by the router's estimate. A window of 8192 serves short requests without tools, such as titles, and the next model in the chain gets the other requests.
 
 ### Fallback
 
@@ -209,7 +209,11 @@ While a request to a local upstream runs, the router reads the memory signals ev
 
 ### Context window reported to Hermes
 
-Hermes refuses a model whose context window is below 64,000 tokens. The router reports the smallest window among the cloud models in its routes, and never less than 64,000. A cloud upstream without `context_window` counts as `cloud_window_default`, which is 128,000. The doctor warns about cloud models below 64,000.
+Hermes refuses a model whose context window is below 64,000 tokens. The router reports the smallest window among the cloud models in its routes, and never less than 64,000. A cloud upstream without `context_window` counts as `cloud_window_default`, which is 128,000. The doctor warns about cloud models below 64,000. A `model.context_length` in `config.yaml` takes the place of this window in Hermes, so `setup` and the doctor remove that key when they make the router the default model.
+
+### Hermes's asynchronous calls
+
+Hermes runs some auxiliary tasks asynchronously, such as vision analysis and plugins that use Hermes's plugin LLM API asynchronously. With the router as the main provider, such a call runs one full routed request, classifier included, and then fails, and Hermes moves on to its next provider. Setting `auxiliary.vision.provider` to another provider avoids this for vision analysis. Hermes reads such a setting per task, as `auxiliary.<task>.provider`. This was read from Hermes's source and has not been tried.
 
 ### Keys
 
@@ -221,9 +225,11 @@ With `save_traces: true` the router appends one JSON line per request to `~/.loc
 
 ## The classifier's extra call
 
-With the classifier on, each new user message costs one extra request before the turn starts. By default it goes to `freellmapi/auto` with a fixed system prompt, which is in `plugins/polytropos_router/classifier.py`, and the text of the last user message. It asks for at most 16 output tokens, with `temperature` 0 and a timeout of 8 seconds. Requests later in the same turn reuse the decision, so a tool loop does not repeat the call.
+With the classifier on, each new user message costs one extra request before the turn starts. By default it goes to `freellmapi/auto` with a fixed system prompt, which is in `plugins/polytropos_router/classifier.py`, and the text of the last user message. A message longer than 2,000 characters is cut to its first 1,000 and its last 1,000 characters. It asks for at most 16 output tokens, with `temperature` 0 and a timeout of 8 seconds. Requests later in the same turn reuse the decision, so a tool loop does not repeat the call.
 
-The call uses free quota and adds its latency to the start of every turn. There is no rule that skips it for short messages. A channel hint skips it for the turns of that platform, and `classifier: null` turns it off, which sends every turn to `default_route`. The classifier sees the last user message, so with a cloud classifier that text goes to a cloud provider, also on turns that then run on a local model. A local classifier passes the memory guard and the fit check first, like any local model.
+Hermes's auxiliary calls also pass through the router, because Hermes tries the main provider first for them. Titles, context compression and smart approvals each have a user message of their own, so each of these calls costs one classifier call. The user message of a compression call holds the conversation being summarized, so the classifier gets the start and the end of that conversation.
+
+The call uses free quota and adds its latency to the start of every turn. There is no rule that skips it for short messages. A channel hint skips it for the turns of that platform, and `classifier: null` turns it off, which sends every turn to `default_route`. The classifier sees up to 2,000 characters of the last user message, so with a cloud classifier that text goes to a cloud provider, also on turns that then run on a local model. A local classifier passes the memory guard and the fit check first, like any local model.
 
 ## Settings
 
@@ -251,7 +257,7 @@ Without an `upstreams` key the router has one upstream, `freellmapi`, with `base
 
 Every route entry must name a known upstream, and `default_route` and every channel hint must name a route. The classifier only answers `simple` or `complex`, so a route with another name is reached through `default_route` or a channel hint only. When the settings have an error, the router runs on the built-in defaults above, logs a warning, and the doctor shows the error.
 
-Here is an example with a local Ollama model first on the simple route. With `context_window: 8192` that model only gets the requests that fit, as described in [Window fit](#window-fit), and the other requests go to `freellmapi/auto`.
+Here is an example with a local Ollama model first on the simple route. With `context_window: 8192` that model serves short requests without tools, such as titles, and the other requests go to `freellmapi/auto`. An agent turn with Hermes's default tools needs a window of about 20,000 tokens by the router's estimate, as described in [Window fit](#window-fit).
 
 ```yaml
 plugins:
@@ -323,7 +329,7 @@ It reads three variables from the gateway's environment, which Hermes loads from
 | `/pace now` | Answers everything that waits now |
 | `/pace help` | Shows these commands |
 
-`/pace` writes `enabled`, `min_seconds` and `max_seconds` to `~/.hermes/plugins/whatsapp-human-pace/settings.json`, and these win over the environment. The same file can hold `humanize`, which is `true` by default. With `false`, WhatsApp replies keep the model's Markdown and emoji. While messages wait, their text is saved in `pending.json` in the same folder. After a gateway restart, the saved texts of a chat go along with the next message from that chat.
+`/pace` writes `enabled`, `min_seconds` and `max_seconds` to `~/.hermes/plugins/whatsapp-human-pace/settings.json`, and these win over the environment. The same file can hold `humanize`, which is `true` by default. With `false`, WhatsApp replies keep the model's Markdown and emoji. While messages wait, their text is saved in `pending.json` in the same folder, with mode 0600. After a gateway restart, the saved texts of a chat go along with the next message from that chat.
 
 ## Memory guard
 
@@ -339,7 +345,7 @@ The Linux PSI threshold of 10.0 is an untuned starting value. All limits are fix
 
 ### Fit check
 
-For a model on an Ollama upstream that is not loaded yet, the guard adds up the model's size from `/api/tags`, the KV cache for the upstream's `context_window`, the models already loaded (`/api/ps`) and a reserve of 4 GiB. The KV cache is 2 × layers × KV heads × head size × window × 2 bytes, with the numbers from `/api/show`. The model fits when the sum is at most the machine's RAM. A model that is already loaded always fits. When a number cannot be read, the check does not block, and the watchdog stays as the safety net.
+For a model on an Ollama upstream that is not loaded yet, the guard adds up the model's size from `/api/tags`, the KV cache for the upstream's `context_window`, the models already loaded (`/api/ps`) and a reserve of 4 GiB. The KV cache is 2 × layers × KV heads × head size × window × 2 bytes, with the numbers from `/api/show`. The model fits when the sum is at most the machine's RAM. A model that is already loaded always fits. The guard matches names the way Ollama does, so a name without a tag means `<name>:latest`. When `/api/tags` answers and does not list the model, Ollama has not pulled it. The check then refuses the model and logs a warning that the model is not pulled, once per model while Hermes runs, so the router goes on to the next model in the chain. When `/api/tags` or another number cannot be read, the check does not block, and the watchdog stays as the safety net.
 
 ### Watchdog
 
@@ -413,7 +419,7 @@ In managed mode, `hermes polytropos update freellmapi`, and `update` with `all`,
 5. Check the new version. FreeLLMAPI has to answer `/v1/models` with JSON (status 200 or 401) within 60 seconds. Then stack-canary's tool checks run once each on the first cloud model in the routes whose upstream is on this machine.
 6. When a check fails, stop the service, restore the backup, point `current` back at the old release and start it. The restore first deletes the database's `-wal` and `-shm` files, so stale ones cannot damage the restored database.
 
-The update rolls back when FreeLLMAPI does not answer `/v1/models` within 60 seconds, or when the tested model does not pass all of A1 to A6. Every status other than `pass`, such as a stack-canary `error` from a rate limit, counts as not passing, and so does a check without a row in stack-canary's summary. An error while the new version starts or is checked also rolls the update back. When the tool-call check cannot run at all, update prints that it was skipped and why, and the new version stays. That happens when the router plugin is missing or no route has a cloud model on this machine, when stack-canary is not installed, in which case update names `hermes polytropos install`, and when stack-canary cannot run or leaves no summary that Polytropos can read. When the old version does not start again after a restore, Polytropos prints the command to start it by hand.
+The update rolls back when FreeLLMAPI does not answer `/v1/models` within 60 seconds, or when the tested model does not pass all of A1 to A6. Every status other than `pass`, such as a stack-canary `error` from a rate limit, counts as not passing, and so does a check without a row in stack-canary's summary. An error while the new version starts or is checked also rolls the update back. When the tool-call check cannot run at all, update prints that it was skipped and why, and the new version stays. That happens when the router plugin cannot be loaded or no route has a cloud model on this machine, when stack-canary is not installed, in which case update names `hermes polytropos install`, and when stack-canary cannot run or leaves no summary that Polytropos can read. When the old version does not start again after a restore, Polytropos prints the command to start it by hand.
 
 `hermes polytropos rollback freellmapi` runs step 6 by hand, with the newest backup.
 
@@ -424,17 +430,17 @@ The pins are in `versions.lock`. Polytropos checks a program with `<program> --v
 - **rtk.** Downloads the release archive for this platform (`darwin-arm64`, `darwin-x86_64`, `linux-x86_64` or `linux-aarch64`), checks its SHA-256, installs the binary as `~/.local/bin/rtk`, then runs `~/.local/bin/rtk init --agent hermes`, which adds rtk's Hermes plugin to the profile's `plugins/rtk/`. Another rtk on the `PATH` does not count as installed.
 - **graphify.** `uv tool install graphifyy==<version>`, then `graphify install --platform hermes`, which writes graphify's skill to `~/.hermes/skills/graphify/`.
 - **ast-grep.** `uv tool install ast-grep-cli==<version>`, then `hermes skills install official/software-development/ast-grep`.
-- **stack-canary.** `uv tool install git+https://github.com/Lil-Clanky/stack-canary@<commit>`. stack-canary has no version flag, so it counts as installed at its pinned commit whenever `canary run --help` works. An installed stack-canary therefore stays at its commit when the pin moves.
+- **stack-canary.** `uv tool install git+https://github.com/Lil-Clanky/stack-canary@<commit>`. stack-canary has no version flag, so `install` records the commit it installed in `state.json`. It counts as installed at its pin when `canary run --help` works and that record is the pinned commit. Without a record, or with a record of another commit, `install` and `update` install the pinned commit.
 - **OpenCode**, optional. `npm install -g opencode-ai@<version>`, then `npx -y freellmapi@<cli_version> setup-opencode`, then `hermes skills install official/autonomous-ai-agents/opencode`.
 - **qmd**, optional. `npm install -g @tobilu/qmd@<version>`, then `hermes skills install official/research/qmd`. qmd downloads and runs local GGUF models of its own, which is heavy on a machine with little memory.
-- **context7**, optional. `npm install -g @upstash/context7-mcp@<version>`, then `hermes mcp add context7 --command context7-mcp`. When the profile has a `context7` entry already, install leaves it as it is and skips that step. When `hermes mcp add` fails, install prints it as a manual step and goes on.
+- **context7**, optional. `npm install -g @upstash/context7-mcp@<version>`, then `hermes mcp add context7 --command context7-mcp`. When the profile has a `context7` entry already, install leaves it as it is and skips that step. When `hermes mcp add` fails, install says that the MCP server was not added, prints the command to run yourself and goes on.
 - **Ollama**, optional and only when missing. On macOS install downloads `ollama-darwin.tgz` of the pinned version, checks its SHA-256, unpacks it into `~/.local/lib/polytropos/ollama/<version>/` and links `~/.local/bin/ollama` to it. On Linux it runs `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=<version> sh`. On macOS Polytropos does not start Ollama, so run `ollama serve` yourself.
 
 ## Canary data
 
 ### The published matrix
 
-The router and the doctor read stack-canary's published results from `https://raw.githubusercontent.com/Lil-Clanky/stack-canary/matrix/matrix.json`. Polytropos keeps a copy in `~/.cache/polytropos/canary-matrix.json` and downloads a new one when the copy is older than 86400 seconds. When the download fails, it uses the old copy, or an empty matrix when there is none.
+The router and the doctor read stack-canary's published results from `https://raw.githubusercontent.com/Lil-Clanky/stack-canary/matrix/matrix.json`. Polytropos keeps a copy in `~/.cache/polytropos/canary-matrix.json` and downloads a new one when the copy is older than 86400 seconds, or when its modification time lies in the future. When the download fails, it uses the old copy, or an empty matrix when there is none, and writes the stamp file `canary-matrix.json.failed` next to the copy. While that stamp is younger than 3600 seconds, Polytropos tries no new download and uses the old copy. A good download removes the stamp.
 
 The file has this form. The example cell is the one in stack-canary's own reference.
 
@@ -451,7 +457,7 @@ The file has this form. The example cell is the one in stack-canary's own refere
 | Field | Meaning |
 |---|---|
 | `schema` | Format version. Polytropos reads only `1`. |
-| `generated` | When stack-canary wrote the file |
+| `generated` | The time of the newest run in the matrix. Polytropos does not read it. |
 | `cells[].ollama` | Ollama version |
 | `cells[].model` | Model name as Ollama knows it |
 | `cells[].check` | stack-canary check, `A1` to `A6` |
@@ -484,6 +490,7 @@ The file holds no B6 cells and no results of `--openai-endpoint` runs. Polytropo
 | `~/.local/state/polytropos/freellmapi.log` | FreeLLMAPI's output on macOS |
 | `~/.local/state/polytropos/router-traces.jsonl` | Router traces when `save_traces` is on, mode 0600 |
 | `~/.cache/polytropos/canary-matrix.json` | Cached stack-canary matrix |
+| `~/.cache/polytropos/canary-matrix.json.failed` | Stamp of a failed matrix download, see [The published matrix](#the-published-matrix) |
 | `~/Library/LaunchAgents/io.github.lil-clanky.polytropos.freellmapi.plist` | FreeLLMAPI service on macOS |
 | `~/.config/systemd/user/polytropos-freellmapi.service` | FreeLLMAPI service on Linux |
 | `~/.local/bin/rtk` | rtk |
@@ -509,7 +516,7 @@ The file holds no B6 cells and no results of `--openai-endpoint` runs. Polytropo
 }
 ```
 
-`profiles` is keyed by the profile's Hermes home. `config_changes` lists each changed key with its first old value, `null` when the key did not exist, and its latest new value. Setup records the whole `model` section under the key `model`, as it was before `setup-hermes` rewrote it. When that section held an API key, `state.json` holds a copy of it until uninstall puts the section back. An MCP server that `install` added is recorded here too, under `mcp_servers.<name>`, and an entry that was there before is not recorded. `integrations` lists the other set-up commands that `install` ran for this profile, each with the folder or file it added or changed. `shared` has an entry per shared part, `freellmapi` or a program name, with the profiles that use it, whether Polytropos installed it and its version. The FreeLLMAPI entry also has the mode.
+`profiles` is keyed by the profile's Hermes home. `config_changes` lists each changed key with its first old value, `null` when the key did not exist, and its latest new value. Setup records the whole `model` section under the key `model`, as it was before `setup-hermes` rewrote it. When that section held an API key, `state.json` holds a copy of it until uninstall puts the section back. An MCP server that `install` added is recorded here too, under `mcp_servers.<name>`, and an entry that was there before is not recorded. `integrations` lists the other set-up commands that `install` ran for this profile, each with the folder or file it added or changed. `shared` has an entry per shared part, `freellmapi` or a program name, with the profiles that use it, whether Polytropos installed it and its version. The FreeLLMAPI entry also has the mode. For stack-canary the version is the short commit that `install` installed, which the doctor and `install` compare with the pin.
 
 ## Hermes v0.23.2 notes
 
@@ -523,7 +530,8 @@ The file holds no B6 cells and no results of `--openai-endpoint` runs. Polytropo
 - **Context minimum.** Hermes refuses a model that reports a context window below 64,000 tokens. The router reports at least 64,000.
 - **Provider switch.** `hermes config set model.provider` removes `model.base_url` and `model.api_mode` when they belonged to the previous provider. Polytropos records both before it switches the provider, so uninstall can restore them.
 - **Model section.** `hermes config set model '<mapping>'` is refused while `model` is a mapping, and a plain string goes into `model.default`. With `--force` Hermes replaces the whole section, which is how uninstall restores it.
-- **Output limit.** Hermes sends `max_tokens` only when the agent's `max_tokens` is set, which it is not by default, or for a one-time retry. See [Window fit](#window-fit).
+- **Output limit.** Hermes has no setting for the output limit, so a normal turn reaches the router without `max_tokens`. Hermes sets a one-time `max_tokens` when it retries a request. See [Window fit](#window-fit).
+- **Asynchronous auxiliary calls.** An asynchronous auxiliary call, such as vision analysis, runs one full routed request on the router and then fails, and Hermes moves on to its next provider. `auxiliary.vision.provider` set to another provider avoids it. See [Hermes's asynchronous calls](#hermess-asynchronous-calls).
 - **Gateway restart.** A running gateway loads plugin changes only after `hermes gateway restart`. Polytropos prints the command and leaves the restart to you, because a restart interrupts running chats.
 
 ## Not included
@@ -565,7 +573,7 @@ After a change to `versions.lock`, run `python scripts/sync_shared.py`, which co
 
 ### The weekly bump job
 
-`.github/workflows/bump.yml` runs every Monday at 06:17 UTC, and you can start it by hand (`workflow_dispatch`). It asks `check_updates.py` which components have an update and starts one job per component. Each job applies its update, runs `sync_shared.py` and the tests without the `e2e` ones, and pushes the branch `bump/<component>`. Then it opens a pull request for that branch, or updates the open one, so there is one pull request per component. For FreeLLMAPI the job also builds the new tag, starts it with an empty database, and checks that `/livez` answers and that `/v1/models` answers 200 or 401 with JSON.
+`.github/workflows/bump.yml` runs every Monday at 06:17 UTC, and you can start it by hand (`workflow_dispatch`). It asks `check_updates.py` which components have an update and starts one job per component. Each job applies its update, runs `sync_shared.py` and the tests without the `e2e` ones, and pushes the branch `bump/<component>`. Then it opens a pull request for that branch, or updates the open one, so there is one pull request per component. For FreeLLMAPI the job also builds the new tag, starts it with an empty database, and checks that `/livez` answers and that `/v1/models` answers 200 or 401 with JSON. Because the database starts empty, CI does not check a database migration. On a user's machine the update backs up the database first and rolls back when the new version does not answer, and `hermes polytropos rollback freellmapi` restores the backup by hand.
 
 The job needs the repository setting "Allow GitHub Actions to create and approve pull requests", under Settings, Actions, General, Workflow permissions. Without it the job cannot open the pull request.
 

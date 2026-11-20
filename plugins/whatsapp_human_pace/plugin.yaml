@@ -1,6 +1,6 @@
 name: whatsapp-human-pace
 version: 1.0.0
-description: "Holds incoming WhatsApp messages for a random 5 to 10 minutes by default and batches them into one turn, rewrites the replies to read like a person's messages by removing Markdown, most emoji, long dashes, curly quotes and Dutch stock openers, and adds a disclosure note unless that is turned off."
+description: "Holds incoming WhatsApp messages for a random 5 to 10 minutes by default and joins text messages that arrive one after another into one turn, rewrites the replies to read like a person's messages by removing Markdown, most emoji, long dashes, curly quotes and Dutch stock openers, and adds a disclosure note unless that is turned off."
 author: Lil-Clanky
 provides_hooks:
   - pre_gateway_dispatch

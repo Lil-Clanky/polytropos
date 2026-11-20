@@ -4,7 +4,7 @@ Polytropos is a plugin pack for [Hermes Agent](https://github.com/NousResearch/h
 
 The pack has two plugins of its own.
 
-- `polytropos-router` is a model provider. A session runs on its model `auto`, and the router chooses a real model for each turn. A short classifier call puts the turn on the `simple` or the `complex` route, and each route is a list of models that the router tries in order. A local model only gets the turn when the machine has memory to spare.
+- `polytropos-router` is a model provider. A session runs on its model `auto`, and the router chooses a real model for each turn. A short classifier call puts the turn on the `simple` or the `complex` route, and each route is a list of models that the router tries in order. A local model only gets the turn when the machine has memory to spare and the request fits the `context_window` set for it.
 - `polytropos` adds the `hermes polytropos` command. It installs the other parts at pinned versions, runs FreeLLMAPI as a background service and checks that everything works together. It also pauses turns on a local model when memory runs low, and keeps the machine awake while a turn runs.
 
 Every command, setting and path is listed in [docs/reference.md](docs/reference.md).
@@ -37,6 +37,7 @@ The programs are pinned in [versions.lock](versions.lock) and the plugins in [he
 
 - Hermes Agent v0.23.2, installed and working. The doctor warns when it finds another version.
 - macOS, or Linux with systemd. The FreeLLMAPI service runs as a LaunchAgent on macOS and as a systemd user unit on Linux.
+- A Mac on arm64 or x86_64, or a Linux machine on x86_64 or aarch64. rtk has release downloads for these machines only. On another machine `hermes polytropos install` stops with an error that names the platform and the machine, and `update` does the same when it reaches the programs.
 - git and [uv](https://docs.astral.sh/uv/).
 - Node.js `>=20.18.0 <25.0.0` with npm, to build and run FreeLLMAPI. Polytropos does not install Node, and the doctor checks its version.
 - `~/.local/bin` on your `PATH`. Polytropos puts rtk there, and on macOS also Ollama.
@@ -48,7 +49,17 @@ Run these commands in a terminal, in the Hermes profile you want to set up.
 ```sh
 git clone https://github.com/Lil-Clanky/polytropos
 hermes plugins pack install polytropos/hermes-pack.yaml
+```
+
+This first pack install stops polytropos and prints the findings of Hermes's install scan, as step 2 below explains. Read them, then run the pack install again with `--force`.
+
+```sh
 hermes plugins pack install --force polytropos/hermes-pack.yaml
+```
+
+Then run the rest.
+
+```sh
 hermes polytropos doctor
 hermes polytropos install
 hermes polytropos setup
@@ -57,13 +68,13 @@ hermes polytropos doctor
 
 Here is what each step does.
 
-1. **Get the pack file.** Clone the repository, or download `hermes-pack.yaml` from a release and install that file.
+1. **Get the pack file.** Clone the repository, or download `hermes-pack.yaml` at a release tag from `https://raw.githubusercontent.com/Lil-Clanky/polytropos/<tag>/hermes-pack.yaml` and install that file. Releases do not attach the file.
 2. **Install the pack.** Hermes shows its review screen, a list of the plugins with their sources and pinned commits, and asks you to confirm with `y`. That question is why the pack install needs a terminal. Then Hermes scans each plugin before it installs it. On Hermes v0.23.2 the first run stops polytropos and prints the findings of its scan, prints a failure line for ponytail, and exits with status 1. The scan gives polytropos a caution verdict, with findings about launch agents, systemd services, git clones and `sudo`. They come from what the plugin does. It writes a LaunchAgent or a systemd unit to run FreeLLMAPI, it clones the git repositories of FreeLLMAPI and ponytail, and its doctor names `sudo pmset -a sleep 0` as a fix for you to run. Read the findings for polytropos, and for any other plugin that the scan stopped, then run the same command again with `--force`. With `--force` Hermes installs a plugin with a caution verdict without printing its findings, and a dangerous verdict still stops the plugin. The second run installs polytropos, polytropos-router and superpowers and prints the ponytail failure again. Step 4 installs ponytail another way. When an entry fails with `fatal: shallow file has changed since we read it`, run the command with `--force` once more. What this step says about the scan was read from Hermes's source and its scanner and has not been tried in a real install.
 3. **Run the doctor.** On a new install it reports FreeLLMAPI, ponytail and the programs as missing.
 4. **Install the rest.** `hermes polytropos install` builds FreeLLMAPI at its pinned tag and runs it as a service on `127.0.0.1:3001`. It asks before it installs ponytail from its pinned commit, installs the default programs, and asks about each optional one. When a FreeLLMAPI already answers on port 3001, Polytropos uses that one as it is and leaves its updates to you. To let Polytropos run it instead, stop it and run `hermes polytropos adopt --from <its checkout>`. When another program holds port 3001, install stops and asks you to free the port first.
 5. **Add provider keys.** Open FreeLLMAPI's dashboard at http://127.0.0.1:3001, add your provider keys, and copy FreeLLMAPI's unified API key, which the next step asks for.
 6. **Connect Hermes.** `hermes polytropos setup` runs FreeLLMAPI's own `setup-hermes`. When it asks for an API key, paste the unified key. `setup-hermes` stores the key as `FREELLMAPI_API_KEY` in the profile's `.env` and rewrites the profile's `model` section so that FreeLLMAPI's model is the default. Polytropos keeps a copy of the `model` section from before, so that uninstall can put it back. Then it asks whether to make the router the default model instead, and writes the router settings.
-7. **Run the doctor again.** When no check fails and the router is not the default model yet, the doctor asks whether to make it the default.
+7. **Run the doctor again.** When no check fails, the profile has `FREELLMAPI_API_KEY` and the router is not the default model yet, the doctor asks whether to make it the default. Without the key it prints the setup command instead.
 
 ### The FreeLLMAPI key
 
@@ -128,17 +139,17 @@ Some things stay.
 ## What stays on this machine
 
 - In managed mode FreeLLMAPI listens on 127.0.0.1 only.
-- Provider keys stay in FreeLLMAPI's encrypted database, and the unified key in the profile's `.env`. Polytropos does not print or log key values. When your `model` section held a key before the setup, `~/.local/state/polytropos/state.json` keeps a copy of that section, with mode 0600, until uninstall puts it back.
+- Provider keys stay in FreeLLMAPI's encrypted database, and the unified key in the profile's `.env`. Polytropos does not print or log key values. When your `model` section held a key before the setup, `~/.local/state/polytropos/state.json` keeps a copy of that section, with mode 0600, until uninstall puts it back. Uninstall puts it back with `hermes config set --force model '<json>'`, so a key written literally in that section shows in the process list while the command runs. Hermes has no way to take the value on stdin.
 - The router writes no message text to disk. Its traces are off by default. When you turn them on, they record the route and the model of each request without message text, in a file that only your user can read.
-- The classifier sends the last user message of each turn to the classifier model, which is FreeLLMAPI's `auto` model by default. With a cloud classifier that text reaches a cloud provider, also when the turn itself then runs on a local model.
+- The classifier sends the last user message of each turn to the classifier model, which is FreeLLMAPI's `auto` model by default. It sends at most 2,000 characters, the start and the end of a longer message. Hermes's own auxiliary calls, such as titles, context compression and smart approvals, also pass through the router, and each of them costs one classifier call. The user message of a compression call holds the conversation being summarized. With a cloud classifier that text reaches a cloud provider, also when the turn itself then runs on a local model.
 - `hermes polytropos canary run` only tests endpoints on this machine, and its results stay in `~/.local/share/polytropos/canary`.
 - The doctor's key-file check reads file names and permissions and does not open the files.
 - Programs are installed at the versions in `versions.lock`. The FreeLLMAPI checkout is checked against its pinned commit, and the rtk and macOS Ollama archives against their SHA-256.
-- Outside installs and updates, Polytropos contacts GitHub only for stack-canary's public results, at most once a day. `update` without a part reads the latest release from GitHub. Installs and updates download from GitHub, npm and PyPI, and for Ollama on Linux from ollama.com.
+- Outside installs and updates, Polytropos contacts GitHub only for stack-canary's public results. It downloads them at most once a day while its copy is good, and at most once an hour after a failed download. `update` without a part reads the latest release from GitHub. Installs and updates download from GitHub, npm and PyPI, and for Ollama on Linux from ollama.com. When Polytropos does not run FreeLLMAPI, `hermes polytropos setup` runs FreeLLMAPI's CLI through `npx`, which contacts npm.
 
 ## WhatsApp pacing
 
-The repository also holds `whatsapp-human-pace`, a plugin for Hermes's WhatsApp gateway. It holds incoming WhatsApp messages, answers after a random delay of 5 to 10 minutes, and batches what arrived in the meantime into one turn. It also turns Markdown in WhatsApp replies into plain text and removes most emoji. By default the first reply in a chat each day starts with the note "Replies in this chat come from an assistant." The plugin is not part of the pack. Install it on its own with
+The repository also holds `whatsapp-human-pace`, a plugin for Hermes's WhatsApp gateway. It holds incoming WhatsApp messages and answers after a random delay of 5 to 10 minutes. Text messages that arrived one after another in the meantime are joined into one turn, and a message with media, such as a photo, goes on as a message of its own. In WhatsApp replies the plugin turns Markdown into plain text, replaces long dashes with commas, straightens curly apostrophes, and removes most emoji, curly double quotes and a few Dutch stock openers. By default the first reply in a chat each day starts with the note "Replies in this chat come from an assistant." The plugin remembers that note per Hermes session in memory, so the note comes again after a gateway restart, a session reset or a context compression. `/pace` also takes the Dutch words `uit`, `aan` and `nu`, and the list of stock openers is Dutch. Both are kept on purpose. The plugin is not part of the pack. Install it on its own with
 
 ```sh
 hermes plugins install Lil-Clanky/polytropos/plugins/whatsapp_human_pace
