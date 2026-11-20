@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import random
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -224,7 +225,15 @@ def _save() -> None:
         }
         path = _state_file()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False))
+        # Written whole or not at all, and private: the held texts are the user's messages.
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".pending.")  # mkstemp creates mode 0o600
+        try:
+            with os.fdopen(fd, "w") as handle:
+                json.dump(data, handle, ensure_ascii=False)
+            os.replace(tmp, path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
     except Exception:  # never break dispatch over bookkeeping
         logger.debug("human-pace: could not save pending state", exc_info=True)
 

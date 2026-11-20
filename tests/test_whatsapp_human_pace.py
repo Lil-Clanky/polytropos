@@ -85,3 +85,12 @@ def test_note_added_even_when_humanize_is_off(pace):
 def test_broken_config_falls_back_to_defaults(pace):
     pace.cfg["plugins"] = "nonsense"
     assert reply(pace).startswith(NOTE)
+
+
+def test_pending_file_is_written_whole_and_private(pace, monkeypatch):
+    monkeypatch.setitem(pace._PENDING, "whatsapp|chat", {"events": [types.SimpleNamespace(text="held text")], "due": 5.0})
+    pace._save()
+    path = pace._state_file()
+    assert pace.json.loads(path.read_text()) == {"whatsapp|chat": {"due": 5.0, "texts": ["held text"]}}
+    assert path.stat().st_mode & 0o777 == 0o600  # held texts are private messages
+    assert [p.name for p in path.parent.iterdir()] == ["pending.json"]  # no temp file left behind
