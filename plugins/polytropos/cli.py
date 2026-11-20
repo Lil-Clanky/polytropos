@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from . import doctor, programs
 from ._shared import canary, paths
-from .freellm import PORT, REPO_URL, FreeLLM, Pin, _default_get
+from .freellm import PORT, REPO_URL, FreeLLM, Pin, PortBusy, _default_get
 from .services import ServiceManager
 from .state import (State, config_changes, load_state, record_config_change, release_shared, save_state, set_mode,
                     use_shared)
@@ -37,8 +37,10 @@ RELEASE_API = "https://api.github.com/repos/Lil-Clanky/polytropos/releases/lates
 RAW = "https://raw.githubusercontent.com/Lil-Clanky/polytropos"
 OWN_REPO = "Lil-Clanky/polytropos"
 ROUTER_KEY = "plugins.entries.polytropos-router."
-ROUTER_DEFAULT = [("model.provider", "polytropos-router"), ("model.default", "auto")]
+# None removes the key: Hermes prefers a configured model.context_length over the router's own window.
+ROUTER_DEFAULT = [("model.provider", "polytropos-router"), ("model.default", "auto"), ("model.context_length", None)]
 PACK_PLUGINS = ("polytropos-router", "ponytail", "superpowers", "polytropos")
+PONYTAIL_QUESTION = "ponytail is not installed. Install it from its pinned commit?"
 _TAG = re.compile(r"[A-Za-z0-9._-]+")
 _HERE = Path(__file__).resolve()
 
@@ -183,7 +185,7 @@ def _doctor(args, fx: Effects) -> int:
         return 1
     if _get(_read_config(home), "model.provider") == "polytropos-router":
         return 0
-    answer = _ask_router_default(fx)
+    answer = _ask_router_default(fx) if doctor.api_key() else None  # without the key the router cannot answer
     if answer is None:
         print("To make the Polytropos router the default model, run: hermes polytropos setup")
     elif answer:
@@ -226,15 +228,17 @@ def _setup(args, fx: Effects) -> int:
 
 
 def _write_config(home: Path, state: State, changes: list[tuple[str, object]], fx: Effects) -> bool:
-    """Set each key through `hermes config set` and record its old value for uninstall. Stops at a failed key."""
+    """Set each key through `hermes config set`, or remove it for None, and record its old value for uninstall.
+    Stops at a failed key."""
     current, profile = _read_config(home), str(home)
     for key, new in changes:
         old = _get(current, key)
         if old == new:
             continue
-        command = ["hermes", "config", "set", key, _value(new)]
+        command = ["hermes", "config", "unset", key] if new is None else ["hermes", "config", "set", key, _value(new)]
         if not _run(fx, command):
-            print(f"Setting {key} failed. Run this command yourself, then run hermes polytropos setup again:")
+            print(f"{'Removing' if new is None else 'Setting'} {key} failed. Run this command yourself, then run "
+                  "hermes polytropos setup again:")
             print(f"  {shlex.join(command)}")
             return False
         if key == "model.provider":  # Hermes drops the old provider's route keys; recorded first, restored last
@@ -289,7 +293,8 @@ def _record_integrations(state: State, profile: str, changed: list[tuple[list[st
     save_state(state)
 
 
-def _install_program(p: programs.Program, state: State, profile: str, fx: Effects) -> bool:
+def _install_program(p: programs.Program, state: State, profile: str, fx: Effects, *,
+                     add_integrations: bool = True) -> bool:
     home = Path(profile)
     # Only what this install changes is recorded, so uninstall leaves the user's own setup alone.
     touched = [(command, target, _snapshot(target, home)) for command in p.install_cmds
@@ -299,17 +304,21 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
     # gets it. graphify's skill goes to ~/.hermes whatever the profile, so another profile does not run it again.
     lacking = [c for c, t, old in touched
                if (old is None or old is False) and (isinstance(t, str) or t.is_relative_to(home))]
+    # Update never adds an integration the profile lacks, so one the user removed stays removed.
+    skipped = existing + ([] if add_integrations else [c for c, t, old in touched if old is None or old is False])
+    step = "installed"
     try:
         before = programs.installed_version(p, fx.run)
         if programs.needs_install(p, fx.run):
-            programs.install(replace(p, install_cmds=[c for c in p.install_cmds if c not in existing]), fx.run,
+            programs.install(replace(p, install_cmds=[c for c in p.install_cmds if c not in skipped]), fx.run,
                              download=fx.download)
             print(f"{p.name} {p.version} is installed.")
-        elif lacking:
+        elif lacking and add_integrations:
+            step = "set up for this profile"
             programs.install(replace(p, asset_url="", install_cmds=lacking), fx.run)
             print(f"{p.name} is set up for this profile.")
     except (subprocess.CalledProcessError, OSError, ValueError) as err:
-        print(f"{p.name} was not installed: {err}")
+        print(f"{p.name} was not {step}: {err}")
         return False
     finally:  # also after a failed step, for what the earlier steps changed
         _record_integrations(state, profile, [(c, t, old) for c, t, old in touched if _snapshot(t, home) != old])
@@ -386,7 +395,7 @@ def _install(args, fx: Effects) -> int:
     if not only or "ponytail" in only:
         if (home / "plugins" / "ponytail").is_dir():
             failed += not _move_ponytail(home, lock, fx)
-        elif "ponytail" in only or _yes(fx, "ponytail is not installed. Install it from its pinned commit?"):
+        elif "ponytail" in only or _yes(fx, PONYTAIL_QUESTION):
             failed += not _ponytail(home, lock, fx)
     for p in progs:
         chosen = p.name in only if only else not p.optional or args.all_optional or _yes(fx, f"Install {p.name}?")
@@ -408,6 +417,16 @@ def _adopt(args, fx: Effects) -> int:
         fx.fl().adopt(args.from_path.expanduser(), pin)
     except Exception as err:  # port, data, node, build or service errors
         print(f"FreeLLMAPI was not adopted: {err}")
+        if isinstance(err, PortBusy):  # adopt never stops or disables anything itself
+            if sys.platform == "darwin":
+                print("If launchd runs the old FreeLLMAPI, find its label with: launchctl list | grep -i freellm")
+                print("Then stop it and keep it from starting again:")
+                print("  launchctl bootout gui/$(id -u)/<label>")
+                print("  launchctl disable gui/$(id -u)/<label>")
+            else:
+                print("If systemd runs the old FreeLLMAPI, stop it and keep it from starting again with: "
+                      "systemctl --user disable --now <unit>")
+            print("If a terminal or a dashboard runs it, stop it there. Then run hermes polytropos adopt again.")
         return 1
     state = load_state()
     _own_freellmapi(state, str(hermes_home()), pin.tag)
@@ -431,7 +450,7 @@ def _update_programs(lock: dict, state: State, profile: str, fx: Effects) -> int
     """Default programs, plus the optional ones this profile installed, at the new pins."""
     chosen = [p for p in _programs(lock)
               if not p.optional or profile in state.shared.get(p.name, {}).get("profiles", [])]
-    return sum(not _install_program(p, state, profile, fx) for p in chosen)
+    return sum(not _install_program(p, state, profile, fx, add_integrations=False) for p in chosen)
 
 
 def _canary_check(fx: Effects) -> Callable[[], bool]:
@@ -441,11 +460,11 @@ def _canary_check(fx: Effects) -> Callable[[], bool]:
     def check() -> bool:
         try:
             cfg, _ = doctor._router().load_config(hermes_home())
-        except ImportError:  # the router plugin is not installed
-            cfg = None
-        slot = cfg and next((s for slots in cfg.routes.values() for s in slots
-                             if not cfg.upstreams[s.upstream].local and _loopback(cfg.upstreams[s.upstream].base_url)),
-                            None)
+        except ImportError:  # the router plugin is not installed, or its code does not import
+            print("The tool-call check was skipped: the router plugin could not be loaded.")
+            return True
+        slot = next((s for slots in cfg.routes.values() for s in slots
+                     if not cfg.upstreams[s.upstream].local and _loopback(cfg.upstreams[s.upstream].base_url)), None)
         if not slot:
             print("The tool-call check was skipped: the router has no cloud model on this machine to test.")
             return True
@@ -509,6 +528,9 @@ def _update(args, fx: Effects) -> int:
         print(f"What changed in FreeLLMAPI: {REPO_URL.removesuffix('.git')}/compare/{old}...{new}")
         if args.component == "freellmapi":
             question = f"Update FreeLLMAPI from {old} to {new}?"
+    if changes:
+        print("Update reinstalls the plugins with --force, so Hermes also installs a plugin with a caution verdict "
+              "from its scan without printing the findings, and a dangerous verdict still stops the plugin.")
     if not _yes(fx, question):
         print("Nothing changed.")
         return 0
@@ -526,8 +548,10 @@ def _update(args, fx: Effects) -> int:
             return 1
     failed = 0
     if everything:  # after the plugins
-        moved = (home / "plugins" / "ponytail").is_dir()
-        failed += not (_move_ponytail(home, lock, fx) if moved else _ponytail(home, lock, fx))
+        if (home / "plugins" / "ponytail").is_dir():
+            failed += not _move_ponytail(home, lock, fx)
+        elif _yes(fx, PONYTAIL_QUESTION):
+            failed += not _ponytail(home, lock, fx)
     if args.component in ("programs", "all"):
         failed += _update_programs(lock, state, profile, fx)
     if args.component in ("freellmapi", "all"):

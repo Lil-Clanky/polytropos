@@ -14,7 +14,7 @@ import yaml
 import polytropos
 from polytropos import cli, doctor, hooks, slash
 from polytropos._shared import guard, paths
-from polytropos.freellm import BuildError, Detected, Pin, UpdateResult
+from polytropos.freellm import BuildError, Detected, Pin, PortBusy, UpdateResult
 from polytropos.programs import load_lock
 from polytropos.state import State, config_changes, load_state, record_config_change, save_state, set_mode, use_shared
 
@@ -151,6 +151,7 @@ def test_doctor_offers_the_router_as_default_model_after_a_clean_run(tmp_home, m
     (home / "config.yaml").write_text(yaml.safe_dump({
         "model": {"provider": "custom", "default": "free-model", "base_url": "http://localhost:3001/v1"}}))
     monkeypatch.setattr(doctor, "CHECKS", (lambda ctx: [doctor.CheckResult("warn", "a warning is no failure")],))
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-test-key")
     run, asked = FakeRun(), []
     assert cli.handle(parse("doctor"), cli.Effects(run=run, ask=lambda q: asked.append(q) or "y")) == 0
     assert asked == ["Make the Polytropos router the default model (provider polytropos-router, model auto)? [y/N] "]
@@ -168,6 +169,27 @@ def test_doctor_offers_the_router_as_default_model_after_a_clean_run(tmp_home, m
     assert cli.handle(parse("doctor"), cli.Effects(run=run, ask=no_terminal)) == 0
     assert run.commands() == []
     assert "To make the Polytropos router the default model, run: hermes polytropos setup" in capsys.readouterr().out
+    monkeypatch.delenv("FREELLMAPI_API_KEY")  # without this profile's key the router could not answer
+    assert cli.handle(parse("doctor"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands() == []
+    assert "To make the Polytropos router the default model, run: hermes polytropos setup" in capsys.readouterr().out
+
+
+def test_router_default_removes_model_context_length_and_uninstall_restores_it(tmp_home, monkeypatch):
+    home = tmp_home / ".hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text(yaml.safe_dump({
+        "model": {"provider": "custom", "default": "free-model", "context_length": 131072}}))
+    monkeypatch.setattr(doctor, "CHECKS", (lambda ctx: [doctor.CheckResult("ok", "fine")],))
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-test-key")
+    run = FakeRun()
+    assert cli.handle(parse("doctor"), cli.Effects(run=run, ask=lambda q: "y")) == 0
+    assert run.commands()[-1] == ["hermes", "config", "unset", "model.context_length"]
+    assert config_changes(load_state(), str(home))[-1] == {"key": "model.context_length", "old": 131072, "new": None}
+    (home / "config.yaml").write_text(yaml.safe_dump({"model": {"provider": "polytropos-router", "default": "auto"}}))
+    run = FakeRun()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands()[0] == ["hermes", "config", "set", "model.context_length", "131072"]
 
 
 def test_doctor_checks_plugins_in_an_installed_home_without_a_pack_file(tmp_home, monkeypatch, capsys):
@@ -266,6 +288,42 @@ def test_adopt_reads_the_checkout_from_from_path(tmp_home, capsys):
     assert cli.handle(args, cli.Effects(freellm=SimpleNamespace(adopt=lambda src, pin: adopted.append(src)))) == 0
     assert adopted == [checkout] and load_state().shared["freellmapi"]["mode"] == "managed"
     assert f"with the data from {checkout}." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("platform, hint", [
+    ("darwin", ["launchctl list | grep -i freellm", "launchctl bootout gui/$(id -u)/<label>",
+                "launchctl disable gui/$(id -u)/<label>"]),
+    ("linux", ["systemctl --user disable --now <unit>"]),
+])
+def test_adopt_says_how_to_stop_the_old_freellmapi_and_stops_nothing(tmp_home, monkeypatch, capsys, platform, hint):
+    def busy(src, pin):
+        raise PortBusy("port 3001 still answers; stop the old FreeLLMAPI first")
+
+    monkeypatch.setattr(cli.sys, "platform", platform)
+    run = FakeRun()
+    fx = cli.Effects(run=run, ask=no_questions, freellm=SimpleNamespace(adopt=busy))
+    assert cli.handle(parse("adopt", "--from", str(tmp_home / "checkout")), fx) == 1
+    out = capsys.readouterr().out
+    assert all(line in out for line in hint) and "terminal or a dashboard" in out
+    assert run.calls == [] and load_state().shared == {}
+
+
+def test_a_failed_integration_step_says_the_program_was_not_set_up_for_this_profile(tmp_home, capsys):
+    rtk = str(tmp_home / ".local" / "bin" / "rtk")
+    run = FakeRun(versions={"rtk": LOCK["rtk"]["version"]}, fail=[(rtk, "init")])
+    assert cli.handle(parse("install", "--only", "rtk"), cli.Effects(run=run, ask=no_questions)) == 1
+    out = capsys.readouterr().out
+    assert "rtk was not set up for this profile" in out and "was not installed" not in out
+
+
+def test_canary_check_says_when_the_router_plugin_cannot_be_loaded(tmp_home, monkeypatch, capsys):
+    def no_router():
+        raise ImportError("no polytropos_router")
+
+    monkeypatch.setattr(doctor, "_router", no_router)
+    assert cli._canary_check(cli.Effects(run=FakeRun()))() is True  # the update stands
+    out = capsys.readouterr().out
+    assert "the router plugin could not be loaded" in out and "no cloud model" not in out
 
 
 # --- update ---
@@ -381,11 +439,13 @@ def test_update_repairs_a_missing_pack_plugin_and_leaves_a_complete_home_alone(t
                 "ast-grep": LOCK["ast-grep"]["version"], "canary": ""}
     run, asked = FakeRun(versions=versions), []
     fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", yaml.safe_dump(pack), new_lock_text()),
-                     ask=lambda q: asked.append(q) or "y")
+                     ask=lambda q: asked.append(capsys.readouterr().out) or "y")  # what was printed before it
     assert cli.handle(parse("update"), fx) == 0
-    assert "  changes: plugin obra/superpowers is not installed" in capsys.readouterr().out and len(asked) == 1
+    [before] = asked
+    assert "  changes: plugin obra/superpowers is not installed" in before and FORCE_NOTE in before
     pack_cmd = ["hermes", "plugins", "pack", "install", "--force"]
     assert [c[:5] for c in run.commands() if c[:2] == ["hermes", "plugins"] or c[0] == "git"] == [pack_cmd]
+    capsys.readouterr()
 
     meta["superpowers"] = {"source": "https://github.com/obra/superpowers.git", "revision": superpowers["commit"]}
     meta_path.write_text(json.dumps(meta))
@@ -395,9 +455,52 @@ def test_update_repairs_a_missing_pack_plugin_and_leaves_a_complete_home_alone(t
     save_state(state)
     fx.run, fx.fetch = (run := FakeRun(versions=versions)), fetcher("v0.2.0", yaml.safe_dump(pack), same_lock)
     assert cli.handle(parse("update"), fx) == 0
-    out = capsys.readouterr().out
-    assert "changes:" not in out and "hermes gateway restart" not in out
+    out = asked[-1] + capsys.readouterr().out
+    assert "changes:" not in out and "hermes gateway restart" not in out and FORCE_NOTE not in out
     assert run.commands() == []
+
+
+FORCE_NOTE = ("Update reinstalls the plugins with --force, so Hermes also installs a plugin with a caution verdict "
+              "from its scan without printing the findings, and a dangerous verdict still stops the plugin.")
+
+
+def test_update_never_adds_an_integration_the_profile_lacks(tmp_home):
+    home = tmp_home / ".hermes"
+    (home / "skills" / "software-development" / "ast-grep").mkdir(parents=True)  # the user removed the other two
+    state = State()
+    use_shared(state, "stack-canary", str(home), version=LOCK["stack-canary"]["ref"][:7], installed_by_us=True)
+    save_state(state)
+    versions = {"rtk": LOCK["rtk"]["version"], "graphify": "0.0.1", "ast-grep": LOCK["ast-grep"]["version"],
+                "canary": ""}
+    run = FakeRun(versions=versions)
+    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, fetch=no_fetch, ask=lambda q: "y")) == 0
+    assert run.commands() == [["uv", "tool", "install", f"graphifyy=={LOCK['graphify']['version']}"]]
+    run = FakeRun(versions=versions)  # install adds them
+    assert cli.handle(parse("install", "--only", "rtk", "graphify"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert [c[1:] for c in run.commands()] == [["init", "--agent", "hermes"],
+                                               ["tool", "install", f"graphifyy=={LOCK['graphify']['version']}"],
+                                               ["install", "--platform", "hermes"]]
+
+
+def test_update_asks_before_it_installs_a_missing_ponytail(tmp_home):
+    home = tmp_home / ".hermes"
+    own = "https://github.com/Lil-Clanky/polytropos.git#plugins/"
+    (home / "plugins").mkdir(parents=True)
+    (home / "plugins" / ".install-metadata.json").write_text(json.dumps({
+        "polytropos": {"source": own + "polytropos", "revision": SHA_NEW},
+        "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW}}))
+    answers = {"Update the plugins": "y", "ponytail is not installed": "n"}
+    asked = []
+
+    def ask(question):
+        asked.append(question)
+        return next(a for start, a in answers.items() if question.startswith(start))
+
+    run = FakeRun()
+    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", pack_text(), (ROOT / "versions.lock").read_text()), ask=ask)
+    cli.handle(parse("update", "all"), fx)
+    assert "ponytail is not installed. Install it from its pinned commit? [y/N] " in asked
+    assert not [c for c in run.commands() if c[0] == "git" or c[:3] == ["hermes", "plugins", "enable"]]
 
 
 def test_update_and_install_move_a_ponytail_clone_to_the_lock_commit(tmp_home):
@@ -757,8 +860,9 @@ def test_setup_records_the_users_model_before_setup_hermes_rewrites_it(tmp_home)
     assert [c[3:] for c in cmds[1:]] == [
         [R + "routes.complex", '["freellmapi/auto"]'], [R + "routes.simple", '["freellmapi/auto"]'],
         [R + "classifier", "freellmapi/auto"], [R + "upstreams.freellmapi", json.dumps(UPSTREAM)],
-        ["model.provider", "polytropos-router"], ["model.default", "auto"]]
-    assert all(c[:3] == ["hermes", "config", "set"] for c in cmds[1:])
+        ["model.provider", "polytropos-router"], ["model.default", "auto"], ["model.context_length"]]
+    assert all(c[:3] == ["hermes", "config", "set"] for c in cmds[1:-1])
+    assert cmds[-1][:3] == ["hermes", "config", "unset"]  # setup-hermes's window would override the router's
     assert config_changes(load_state(), str(home)) == [
         {"key": "model", "old": USER_MODEL, "new": FREELLM_MODEL},
         {"key": R + "routes.complex", "old": None, "new": ["freellmapi/auto"]},
@@ -768,7 +872,8 @@ def test_setup_records_the_users_model_before_setup_hermes_rewrites_it(tmp_home)
         {"key": "model.base_url", "old": FREELLM_MODEL["base_url"], "new": None},
         {"key": "model.api_mode", "old": "chat_completions", "new": None},
         {"key": "model.provider", "old": "custom", "new": "polytropos-router"},
-        {"key": "model.default", "old": "free-model", "new": "auto"}]
+        {"key": "model.default", "old": "free-model", "new": "auto"},
+        {"key": "model.context_length", "old": 131072, "new": None}]
     assert len(asked) == 1 and "default model" in asked[0]
     run = FakeRun()  # the fake config set changed nothing, so only the model block differs from its old value
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
@@ -796,13 +901,13 @@ def test_setup_stops_at_a_failed_key_and_keeps_what_it_recorded(tmp_home, capsys
     set_mode(state, "freellmapi", "external")
     save_state(state)
     run = FakeRun(fail=[("hermes", "config", "set", "model.provider")])
-    answers = iter(["http://192.168.1.5:3001/v1/", "y"])
+    answers = iter(["http://192.0.2.5:3001/v1/", "y"])
     assert cli.handle(parse("setup"), cli.Effects(run=run, ask=lambda q: next(answers))) == 1
-    assert run.commands()[0][-2:] == ["--url", "http://192.168.1.5:3001"]
+    assert run.commands()[0][-2:] == ["--url", "http://192.0.2.5:3001"]
     changes = config_changes(load_state(), str(home))
     assert [c["key"] for c in changes] == [R + "routes.complex", R + "routes.simple", R + "classifier",
                                            R + "upstreams.freellmapi"]
-    assert changes[-1]["new"]["base_url"] == "http://192.168.1.5:3001/v1"
+    assert changes[-1]["new"]["base_url"] == "http://192.0.2.5:3001/v1"
     assert "hermes config set model.provider polytropos-router" in capsys.readouterr().out
 
 

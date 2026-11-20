@@ -100,7 +100,8 @@ def test_macos_start_reloads_a_stopped_job(tmp_path):
 
 def test_manual_start_hint(tmp_path):
     mac = ServiceManager(platform="darwin", run=Runner(), home=tmp_path, uid=501).manual_start_hint()
-    assert f"launchctl bootstrap gui/501 {tmp_path}/Library/LaunchAgents/{LAUNCHD_LABEL}.plist" in mac
-    assert f"launchctl kickstart -k gui/501/{LAUNCHD_LABEL}" in mac
+    # `;`: kickstart also runs when bootstrap fails because the job is already loaded
+    assert mac == (f"launchctl bootstrap gui/501 {tmp_path}/Library/LaunchAgents/{LAUNCHD_LABEL}.plist; "
+                   f"launchctl kickstart -k gui/501/{LAUNCHD_LABEL}")
     assert ServiceManager(platform="linux", run=Runner(), home=tmp_path).manual_start_hint() == \
         f"systemctl --user restart {SYSTEMD_UNIT}"

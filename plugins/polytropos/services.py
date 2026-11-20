@@ -99,7 +99,7 @@ class ServiceManager:
     def manual_start_hint(self) -> str:
         """The command a user can run by hand when start() fails."""
         if self._mac:
-            return (f"launchctl bootstrap gui/{self._uid} {self.path()} && "
+            return (f"launchctl bootstrap gui/{self._uid} {self.path()}; "  # an already loaded job fails bootstrap
                     f"launchctl kickstart -k {self._target}")
         return f"systemctl --user restart {SYSTEMD_UNIT}"
 
