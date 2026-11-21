@@ -113,7 +113,7 @@ def update_freellmapi(tmp_home, run=None):
     set_mode(state, "freellmapi", "managed")
     save_state(state)
     fl = CheckingFreeLLM()
-    fx = cli.Effects(fetch=lambda url: pytest.fail(f"fetched {url}"), ask=lambda q: "y", freellm=fl)
+    fx = cli.Effects(ask=lambda q: "y", freellm=fl)
     if run is not None:
         fx.run = run
     parser = argparse.ArgumentParser()

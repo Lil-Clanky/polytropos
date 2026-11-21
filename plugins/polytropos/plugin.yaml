@@ -1,6 +1,7 @@
 name: polytropos
 kind: standalone
-version: 0.1.0
+version: 0.1.1
+requires_hermes: ">=0.23.2"
 description: Doctor, FreeLLMAPI service, memory guard and sleep hold for Polytropos
 author: Lil-Clanky
 manifest_version: 2

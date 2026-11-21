@@ -40,8 +40,8 @@ class PolytroposRouterProfile(ProviderProfile):
     def create_client(self, **client_kwargs) -> RouterClient:
         extra = {}
         try:
-            from hermes_cli.config import get_env_value
-            extra["env_lookup"] = get_env_value
+            from agent.secret_scope import get_secret  # the active profile's secret, as Hermes resolves it
+            extra["env_lookup"] = get_secret
         except ImportError:
             pass
         return RouterClient(_config(), api_key=client_kwargs.get("api_key"),

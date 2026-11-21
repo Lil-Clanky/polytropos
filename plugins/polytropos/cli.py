@@ -11,8 +11,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
-import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -33,15 +31,15 @@ except ImportError:  # outside Hermes
 if TYPE_CHECKING:  # the router package is importable only after register() runs
     from polytropos_router.config import RouterConfig
 
-RELEASE_API = "https://api.github.com/repos/Lil-Clanky/polytropos/releases/latest"
-RAW = "https://raw.githubusercontent.com/Lil-Clanky/polytropos"
 OWN_REPO = "Lil-Clanky/polytropos"
 ROUTER_KEY = "plugins.entries.polytropos-router."
 # None removes the key: Hermes prefers a configured model.context_length over the router's own window.
 ROUTER_DEFAULT = [("model.provider", "polytropos-router"), ("model.default", "auto"), ("model.context_length", None)]
 PACK_PLUGINS = ("polytropos-router", "ponytail", "superpowers", "polytropos")
 PONYTAIL_QUESTION = "ponytail is not installed. Install it from its pinned commit?"
-_TAG = re.compile(r"[A-Za-z0-9._-]+")
+PLUGIN_UPDATES = ("Hermes updates the Polytropos plugins themselves. After an install from the plugin catalog, run "
+                  "hermes plugins update. After a pack install, run hermes plugins pack install --force with the "
+                  "hermes-pack.yaml of the newer release.")
 _HERE = Path(__file__).resolve()
 
 
@@ -54,17 +52,11 @@ def hermes_home() -> Path:
     return Path(get_hermes_home())
 
 
-def _fetch(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310 (fixed https URLs)
-        return response.read()
-
-
 @dataclass
 class Effects:
     """Every external effect of a command, so tests can replace them."""
 
     run: Callable = subprocess.run
-    fetch: Callable[[str], bytes] = _fetch
     ask: Callable[[str], str] = input
     http_get: Callable[[str, dict], tuple[int, bytes]] = _default_get
     download: Callable[[str, Path], None] | None = None
@@ -437,15 +429,6 @@ def _adopt(args, fx: Effects) -> int:
 
 # --- update and rollback ---
 
-def _release(fx: Effects) -> tuple[str, str, dict]:
-    tag = json.loads(fx.fetch(RELEASE_API))["tag_name"]
-    if not isinstance(tag, str) or not _TAG.fullmatch(tag):
-        raise ValueError(f"unexpected release tag {tag!r}")
-    pack = fx.fetch(f"{RAW}/{tag}/hermes-pack.yaml").decode()
-    lock = tomllib.loads(fx.fetch(f"{RAW}/{tag}/versions.lock").decode())
-    return tag, pack, lock
-
-
 def _update_programs(lock: dict, state: State, profile: str, fx: Effects) -> int:
     """Default programs, plus the optional ones this profile installed, at the new pins."""
     chosen = [p for p in _programs(lock)
@@ -491,63 +474,31 @@ def _update_freellmapi(lock: dict, state: State, profile: str, fx: Effects) -> i
 
 
 def _update(args, fx: Effects) -> int:
-    home, state, everything = hermes_home(), load_state(), args.component == "all"
-    profile, tag, pack_text, changes = str(home), "", "", []
-    if everything:  # the latest release: its plugins first, then programs and FreeLLMAPI from its lock
-        try:
-            tag, pack_text, lock = _release(fx)
-            pack = safe_load(pack_text) or {}
-            own = [e for e in pack.get("plugins", []) if doctor._repo_subdir(str(e["repo"]))[0] == OWN_REPO]
-            names = {doctor._repo_subdir(str(e["repo"])): name for name, e in lock.get("plugins", {}).items()}
-            # The lock's name lets the check find a plugin that programs.ponytail_fallback cloned without a record.
-            others = [{**e, "name": names.get(doctor._repo_subdir(str(e["repo"])), "")}
-                      for e in pack.get("plugins", []) if e not in own]
-        except Exception as err:  # network, JSON, TOML or YAML errors
-            print(f"Could not read the latest Polytropos release from GitHub: {err}")
-            return 1
-        ctx = doctor.DoctorContext(home, Path.home(), sys.platform, lock, {"plugins": own}, fx.run, fx.http_get, None)
-        # A new release changes the own plugins; a pack plugin that is not installed is repaired alike.
-        changes = [r.label for r in doctor.check_plugins(ctx) if r.status != "ok"]
-        changes += [r.label for r in doctor.check_plugins(replace(ctx, pack={"plugins": others})) if r.status == "fail"]
-        print(f"The latest Polytropos release is {tag}.")
-        for label in changes:
-            print(f"  changes: {label}")
-    elif (lock := _lock()) is None:  # the installed plugin's own pins, which install and the doctor read too
+    """Moves ponytail, the programs and FreeLLMAPI to the pins in the installed plugin's versions.lock. It never updates
+    the Polytropos plugins themselves: Hermes does that, so every new plugin commit is one that Hermes installs."""
+    if (lock := _lock()) is None:
         return 1
+    home, state, everything = hermes_home(), load_state(), args.component == "all"
+    profile = str(home)
     managed = state.shared.get("freellmapi", {}).get("mode") == "managed"
     old = fx.fl().current_tag() if managed and args.component != "programs" else ""
     new = _pin(lock).tag
     if old == new and args.component == "freellmapi":
         print(f"FreeLLMAPI is already on {new}.")
         return 0
-    question = {"all": f"Update the plugins, programs and FreeLLMAPI to the versions of {tag}?",
+    question = {"all": "Update ponytail, the programs and FreeLLMAPI to the versions Polytropos pins?",
                 "programs": "Update the programs to the versions Polytropos pins?",
                 "freellmapi": f"Update FreeLLMAPI to {new}?"}[args.component]
     if old and old != new:  # FreeLLMAPI keeps no changelog file, so GitHub's comparison stands in for it
-        print(f"FreeLLMAPI {old} is installed, and Polytropos{' ' + tag if tag else ''} pins FreeLLMAPI {new}.")
+        print(f"FreeLLMAPI {old} is installed, and Polytropos pins FreeLLMAPI {new}.")
         print(f"What changed in FreeLLMAPI: {REPO_URL.removesuffix('.git')}/compare/{old}...{new}")
         if args.component == "freellmapi":
             question = f"Update FreeLLMAPI from {old} to {new}?"
-    if changes:
-        print("Update reinstalls the plugins with --force, so Hermes also installs a plugin with a caution verdict "
-              "from its scan without printing the findings, and a dangerous verdict still stops the plugin.")
     if not _yes(fx, question):
         print("Nothing changed.")
         return 0
-    if changes:
-        with tempfile.TemporaryDirectory() as tmp:
-            pack_file = Path(tmp) / "hermes-pack.yaml"
-            pack_file.write_text(pack_text)
-            # Exit status 1 is expected on Hermes v0.23.2, where ponytail always fails; the own entries decide.
-            _run(fx, ["hermes", "plugins", "pack", "install", "--force", str(pack_file)])
-        left = [r.label for r in doctor.check_plugins(ctx) if r.status != "ok"]
-        if left:
-            print("The plugin update did not finish, so nothing else was updated:")
-            for label in left:
-                print(f"  {label}")
-            return 1
     failed = 0
-    if everything:  # after the plugins
+    if everything:
         if (home / "plugins" / "ponytail").is_dir():
             failed += not _move_ponytail(home, lock, fx)
         elif _yes(fx, PONYTAIL_QUESTION):
@@ -556,8 +507,8 @@ def _update(args, fx: Effects) -> int:
         failed += _update_programs(lock, state, profile, fx)
     if args.component in ("freellmapi", "all"):
         failed += _update_freellmapi(lock, state, profile, fx)
-    if changes:
-        print("Restart the gateway to load the new plugin code: hermes gateway restart")
+    if everything:
+        print(PLUGIN_UPDATES)
     return 1 if failed else 0
 
 
@@ -782,7 +733,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     p = sub.add_parser("adopt", help="run an existing FreeLLMAPI checkout as the Polytropos service")
     p.add_argument("--from", dest="from_path", type=Path, required=True, metavar="PATH",  # Hermes's --source uses "source"
                    help="the FreeLLMAPI checkout whose data to take over")
-    p = sub.add_parser("update", help="update to the latest Polytropos release")
+    p = sub.add_parser("update", help="update ponytail, the programs and FreeLLMAPI to the pinned versions")
     p.add_argument("component", nargs="?", choices=("freellmapi", "programs", "all"), default="all")
     p = sub.add_parser("rollback", help="restore FreeLLMAPI from the backup of its last update")
     p.add_argument("part", choices=("freellmapi",))

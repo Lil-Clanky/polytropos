@@ -124,7 +124,10 @@ def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
             # programs.ponytail_fallback clones without Hermes's installer, which leaves no record
             installed[key] = (entry["name"], {"revision": _git_head(ctx.run, folder)})
         if key not in installed or not pinned:
-            results.append(CheckResult("fail", f"plugin {label} is not installed", fix="hermes polytropos update"))
+            fix = ("install Polytropos again, see Install in its README" if key[0] == "Lil-Clanky/polytropos"
+                   else "hermes polytropos install --only ponytail" if entry.get("name") == "ponytail"
+                   else f"hermes plugins install {entry['repo']} --ref {pinned}")
+            results.append(CheckResult("fail", f"plugin {label} is not installed", fix=fix))
             continue
         name, record = installed[key]
         revision = str(record.get("revision") or "").lower()

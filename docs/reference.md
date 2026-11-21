@@ -1,6 +1,6 @@
 # Polytropos reference
 
-This reference covers Polytropos 0.1.0 on Hermes Agent v0.23.2. Paths are shown with their defaults. `$HERMES_HOME` is `~/.hermes`, and `$XDG_DATA_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are `~/.local/share`, `~/.local/state` and `~/.cache`. For a named Hermes profile the Hermes paths are under `~/.hermes/profiles/<name>/`. The install steps are in the [README](../README.md).
+This reference covers Polytropos 0.1.1 on Hermes Agent v0.23.2. Paths are shown with their defaults. `$HERMES_HOME` is `~/.hermes`, and `$XDG_DATA_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are `~/.local/share`, `~/.local/state` and `~/.cache`. For a named Hermes profile the Hermes paths are under `~/.hermes/profiles/<name>/`. The install steps are in the [README](../README.md).
 
 - [Commands](#commands)
 - [How the router picks a model](#how-the-router-picks-a-model)
@@ -26,7 +26,7 @@ The polytropos plugin adds `hermes polytropos <command>` to Hermes. Every comman
 | `setup` | Connects Hermes to FreeLLMAPI and writes the router settings |
 | `install [--all-optional] [--only NAME ...]` | Installs FreeLLMAPI, ponytail and the pinned programs |
 | `adopt --from PATH` | Runs an existing FreeLLMAPI checkout as the Polytropos service |
-| `update [freellmapi \| programs \| all]` | Updates to the latest Polytropos release, or one part to the versions the installed plugin pins |
+| `update [freellmapi \| programs \| all]` | Updates ponytail, the programs and FreeLLMAPI, or one part, to the versions the installed plugin pins |
 | `rollback freellmapi` | Restores FreeLLMAPI from the backup of its last update |
 | `canary run` | Runs the stack-canary tool checks on the cloud models |
 | `status` | Shows FreeLLMAPI health, the guard verdict and the last router decision |
@@ -43,7 +43,7 @@ In a chat, `/polytropos` shows the same as `status`.
 | Check | What it reports |
 |---|---|
 | Hermes | A `fail` when `hermes --version` shows no version. A `warn` for any version other than 0.23.2. |
-| Plugins | Compares Hermes's install records in `~/.hermes/plugins/.install-metadata.json` with the expected plugins. ponytail and superpowers are expected at their commits in `versions.lock`. polytropos and polytropos-router are expected at the commit in Hermes's install record of the polytropos plugin. Without that record, as when the plugin runs from a checkout, both count as not installed. A ponytail cloned by `install` has no install record, so the doctor reads its commit with git. A missing plugin is a `fail` with the fix `hermes polytropos update`, and a plugin at another commit is a `warn`. |
+| Plugins | Compares Hermes's install records in `~/.hermes/plugins/.install-metadata.json` with the expected plugins. ponytail and superpowers are expected at their commits in `versions.lock`. polytropos and polytropos-router are expected at the commit in Hermes's install record of the polytropos plugin. Without that record, as when the plugin runs from a checkout, both count as not installed. A ponytail cloned by `install` has no install record, so the doctor reads its commit with git. A missing plugin is a `fail`. Its fix says to install Polytropos again for the own plugins, `hermes polytropos install --only ponytail` for ponytail, and `hermes plugins install <repo> --ref <commit>` for superpowers. A plugin at another commit is a `warn`. |
 | FreeLLMAPI | Whether something answers on 127.0.0.1:3001 and whether it is FreeLLMAPI. Nothing on the port, or another program on it, is a `fail`. Then the doctor asks `/v1/models` with the profile's `FREELLMAPI_API_KEY` and never prints the key. A profile without the key, and a key that FreeLLMAPI refuses with 401, are a `warn` with the fix `hermes polytropos setup`. Any other result is a `warn`. It names the HTTP status when FreeLLMAPI returned one, and otherwise says that FreeLLMAPI did not answer. The `ok` line shows the mode Polytropos runs FreeLLMAPI in, and in managed mode also the tag of the installed release. |
 | Node | `node --version` against FreeLLMAPI's range `>=20.18.0 <25.0.0`. A Node outside the range, or no Node, is a `fail` that says to install Node 22 or 24. In external mode it is an `info`, because Polytropos does not run FreeLLMAPI then. |
 | Router | Each error in the `polytropos-router` settings is a `fail`. A cloud model whose window is below 64,000 tokens, and an upstream that does not answer on `<base_url>/models`, are a `warn`. A local upstream whose `/api/version` does not answer as Ollama gets an `info` line. The fit check covers Ollama only, so such an upstream gets the memory, swap and disk checks without it. |
@@ -112,18 +112,16 @@ When port 3001 still answers, adopt prints how to stop the old FreeLLMAPI and ke
 
 ### update
 
-`hermes polytropos update [freellmapi | programs | all]`, with `all` as the default. `all` moves the plugins, ponytail, the programs and FreeLLMAPI to the latest Polytropos release. `programs` and `freellmapi` move one part to the versions in the `versions.lock` of the installed polytropos plugin, the file that `install` and the doctor read, and fetch nothing from GitHub.
+`hermes polytropos update [freellmapi | programs | all]`, with `all` as the default. Update moves parts to the versions in the `versions.lock` of the installed polytropos plugin, the file that `install` and the doctor read. `all` moves ponytail, the programs and FreeLLMAPI, and `programs` and `freellmapi` move one part. Update fetches nothing from the Polytropos repository and never changes the Polytropos plugins. Hermes updates those, with `hermes plugins update` after a catalog install, or `hermes plugins pack install --force` on the pack file of a newer release after a pack install.
 
-1. With `all`, update reads the latest release from `https://api.github.com/repos/Lil-Clanky/polytropos/releases/latest`, then fetches `hermes-pack.yaml` and `versions.lock` at that tag from `https://raw.githubusercontent.com/Lil-Clanky/polytropos/<tag>/`. It prints `The latest Polytropos release is <tag>.` and lists each own plugin that is not at the release's commit, and each other pack plugin that is not installed.
-2. When Polytropos runs FreeLLMAPI and the pinned tag differs from the installed one, update prints both tags and `https://github.com/tashfeenahmed/freellmapi/compare/<installed tag>...<new tag>`. `update programs` skips this. When FreeLLMAPI is already on the pinned tag, `update freellmapi` prints `FreeLLMAPI is already on <tag>.` and stops.
-3. When step 4 will reinstall plugins, update prints `Update reinstalls the plugins with --force, so Hermes also installs a plugin with a caution verdict from its scan without printing the findings, and a dangerous verdict still stops the plugin.` Then it asks `Update the plugins, programs and FreeLLMAPI to the versions of <tag>? [y/N]`. With `programs` it asks `Update the programs to the versions Polytropos pins? [y/N]`. With `freellmapi` it asks `Update FreeLLMAPI to <tag>? [y/N]`, or `Update FreeLLMAPI from <installed tag> to <new tag>? [y/N]` when Polytropos runs another tag. Any answer other than yes prints `Nothing changed.`
-4. With `all` and a plugin from step 1, it runs `hermes plugins pack install --force <pack file>` in the same terminal, because Hermes asks for `y` at its review screen. `--force` reinstalls the plugins that are installed already. It also makes Hermes accept a caution verdict of its install scan without printing the findings, and a dangerous verdict still stops the plugin. `hermes plugins pack install` without `--force`, or `hermes plugins install` of one plugin, shows the findings. See [Hermes v0.23.2 notes](#hermes-v0232-notes). Update ignores the exit status, because the ponytail entry always fails on Hermes v0.23.2, and checks its own two plugins afterwards instead. When they are not at the release's commit, update stops with status 1 and changes nothing else.
-5. With `all`, when `~/.hermes/plugins/ponytail` is missing, it asks `ponytail is not installed. Install it from its pinned commit? [y/N]` and after a yes installs ponytail the way `install` does. When that folder is a clone without a Hermes install record and at another commit, update moves the clone to the release's pin with `git fetch --depth 1` and `git checkout`, as `install` does.
-6. With `all` or `programs`, it installs the pinned versions of the default programs and of the optional programs that `install` recorded for this profile. Update adds no Hermes skill, rtk Hermes plugin or MCP entry that this profile lacks, so one that you removed stays removed. `hermes polytropos install` adds them.
-7. With `all` or `freellmapi`, it updates FreeLLMAPI when Polytropos runs it. In external mode it prints the pinned tag and leaves the update to you, and when FreeLLMAPI is not installed it says to run `hermes polytropos install` first. See [Updates and backups](#updates-and-backups).
-8. When the plugins changed, it prints `Restart the gateway to load the new plugin code: hermes gateway restart`.
+1. When Polytropos runs FreeLLMAPI and the pinned tag differs from the installed one, update prints both tags and `https://github.com/tashfeenahmed/freellmapi/compare/<installed tag>...<new tag>`. `update programs` skips this. When FreeLLMAPI is already on the pinned tag, `update freellmapi` prints `FreeLLMAPI is already on <tag>.` and stops.
+2. It asks `Update ponytail, the programs and FreeLLMAPI to the versions Polytropos pins? [y/N]`. With `programs` it asks `Update the programs to the versions Polytropos pins? [y/N]`. With `freellmapi` it asks `Update FreeLLMAPI to <tag>? [y/N]`, or `Update FreeLLMAPI from <installed tag> to <new tag>? [y/N]` when Polytropos runs another tag. Any answer other than yes prints `Nothing changed.`
+3. With `all`, when `~/.hermes/plugins/ponytail` is missing, it asks `ponytail is not installed. Install it from its pinned commit? [y/N]` and after a yes installs ponytail the way `install` does. When that folder is a clone without a Hermes install record and at another commit, update moves the clone to the pinned commit with `git fetch --depth 1` and `git checkout`, as `install` does.
+4. With `all` or `programs`, it installs the pinned versions of the default programs and of the optional programs that `install` recorded for this profile. Update adds no Hermes skill, rtk Hermes plugin or MCP entry that this profile lacks, so one that you removed stays removed. `hermes polytropos install` adds them.
+5. With `all` or `freellmapi`, it updates FreeLLMAPI when Polytropos runs it. In external mode it prints the pinned tag and leaves the update to you, and when FreeLLMAPI is not installed it says to run `hermes polytropos install` first. See [Updates and backups](#updates-and-backups).
+6. With `all`, it ends with a note on how Hermes updates the Polytropos plugins.
 
-Update exits with status 1 when it cannot read the release or `versions.lock`, when the plugin update does not finish, or when a part fails.
+Update exits with status 1 when it cannot read `versions.lock` or when a part fails.
 
 ### rollback
 
@@ -434,7 +432,7 @@ The pins are in `versions.lock`. Polytropos checks a program with `<program> --v
 - **OpenCode**, optional. `npm install -g opencode-ai@<version>`, then `npx -y freellmapi@<cli_version> setup-opencode`, then `hermes skills install official/autonomous-ai-agents/opencode`.
 - **qmd**, optional. `npm install -g @tobilu/qmd@<version>`, then `hermes skills install official/research/qmd`. qmd downloads and runs local GGUF models of its own, which is heavy on a machine with little memory.
 - **context7**, optional. `npm install -g @upstash/context7-mcp@<version>`, then `hermes mcp add context7 --command context7-mcp`. When the profile has a `context7` entry already, install leaves it as it is and skips that step. When `hermes mcp add` fails, install says that the MCP server was not added, prints the command to run yourself and goes on.
-- **Ollama**, optional and only when missing. On macOS install downloads `ollama-darwin.tgz` of the pinned version, checks its SHA-256, unpacks it into `~/.local/lib/polytropos/ollama/<version>/` and links `~/.local/bin/ollama` to it. On Linux it runs `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=<version> sh`. On macOS Polytropos does not start Ollama, so run `ollama serve` yourself.
+- **Ollama**, optional and only when missing. On macOS install downloads `ollama-darwin.tgz` of the pinned version, checks its SHA-256, unpacks it into `~/.local/lib/polytropos/ollama/<version>/` and links `~/.local/bin/ollama` to it. On Linux Polytropos does not install Ollama, because Ollama's install script asks for `sudo`. Install prints `Polytropos does not install Ollama on Linux. Install it with: curl -fsSL https://ollama.com/install.sh | sh` and counts Ollama as not installed. On macOS Polytropos does not start Ollama, so run `ollama serve` yourself.
 
 ## Canary data
 
@@ -563,7 +561,8 @@ A release takes two commits, because the pack file can only pin a commit that al
 
 1. Commit the code.
 2. Run `python scripts/release.py`. It sets the `ref` of each `Lil-Clanky/polytropos` entry in `hermes-pack.yaml` to that commit, which is `git rev-parse HEAD` unless you pass `--sha <commit>`. `--repo` picks another repository. The script rewrites the `ref` lines only, and exits with status 1 when no entry matched.
-3. Commit the pack file, tag this second commit and publish a GitHub release for the tag. `hermes polytropos update` reads the latest release and takes `hermes-pack.yaml` and `versions.lock` at its tag.
+3. Commit the pack file, tag this second commit and publish a GitHub release for the tag.
+4. For the Hermes plugin catalog, open a pull request on `NousResearch/hermes-agent` that sets `sha` and `version` in `plugin-catalog/polytropos.yaml` and in `plugin-catalog/polytropos-router.yaml` to the code commit from step 1. A maintainer reviews the commits between the old and the new pin before the catalog moves.
 
 ### Pins
 

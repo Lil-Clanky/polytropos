@@ -62,8 +62,7 @@ def _ollama(lock: dict, platform: str) -> Program:
         url = f"https://github.com/ollama/ollama/releases/download/v{v}/ollama-darwin.tgz"
         return Program("ollama", v, ["ollama", "--version"], [], optional=True,
                        asset_url=url, asset_sha256=o["darwin_sha256"])
-    cmd = ["sh", "-c", f"curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION={v} sh"]
-    return Program("ollama", v, ["ollama", "--version"], [cmd], optional=True)
+    return Program("ollama", v, ["ollama", "--version"], [], optional=True)  # install() names the official script
 
 
 def programs(lock: dict, *, platform: str, machine: str) -> list[Program]:
@@ -194,7 +193,13 @@ def _install_ollama_tree(p: Program, download: Callable[[str, Path], None]) -> N
     print("Ollama is installed. Start it with `ollama serve`.")
 
 
+LINUX_OLLAMA = "curl -fsSL https://ollama.com/install.sh | sh"
+
+
 def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], None] | None = None) -> None:
+    if p.name == "ollama" and not p.asset_url:
+        # Ollama's Linux script asks for sudo and has no checksum to pin, so it is left for the user to run.
+        raise ValueError(f"Polytropos does not install Ollama on Linux. Install it with: {LINUX_OLLAMA}")
     if p.asset_url:
         (_install_ollama_tree if p.name == "ollama" else _install_rtk)(p, download or _download)
     for cmd in p.install_cmds:

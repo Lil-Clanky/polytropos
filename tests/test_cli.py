@@ -218,7 +218,7 @@ def test_doctor_checks_plugins_in_an_installed_home_without_a_pack_file(tmp_home
         assert cli.handle(parse("doctor"), cli.Effects(run=FakeRun(), ask=no_questions)) == 1
         out = capsys.readouterr().out
         assert "fail  plugin Lil-Clanky/polytropos#plugins/polytropos is not installed\n" \
-               "        hermes polytropos update" in out
+               "        install Polytropos again, see Install in its README" in out
         assert "fail  plugin Lil-Clanky/polytropos#plugins/polytropos_router is not installed" in out
 
 
@@ -328,27 +328,12 @@ def test_canary_check_says_when_the_router_plugin_cannot_be_loaded(tmp_home, mon
 
 # --- update ---
 
-def pack_text(router_ref=SHA_NEW):
-    return yaml.safe_dump({"name": "polytropos", "plugins": [
-        {"repo": "Lil-Clanky/polytropos", "ref": SHA_NEW, "subdir": "plugins/polytropos"},
-        {"repo": "Lil-Clanky/polytropos", "ref": router_ref, "subdir": "plugins/polytropos_router"},
-        {"repo": "DietrichGebert/ponytail", "ref": "c" * 40},
-    ]})
-
-
 def new_lock_text():
     text = (ROOT / "versions.lock").read_text()
     new = text.replace(f'tag = "{LOCK["freellmapi"]["tag"]}"', 'tag = "v0.16.40"').replace(
         f'ref = "{LOCK["stack-canary"]["ref"]}"', f'ref = "{"d" * 40}"')
     assert new.count("v0.16.40") == 1 and "d" * 40 in new
     return new
-
-
-def fetcher(tag, pack, lock_text):
-    urls = {cli.RELEASE_API: json.dumps({"tag_name": tag}).encode(),
-            f"{cli.RAW}/{tag}/hermes-pack.yaml": pack.encode(),
-            f"{cli.RAW}/{tag}/versions.lock": lock_text.encode()}
-    return lambda url: urls[url]
 
 
 class FakeFreeLLM:
@@ -361,18 +346,6 @@ class FakeFreeLLM:
     def update(self, pin, *, check=None):
         self.updates.append((pin, check))
         return UpdateResult(True, "v0.16.36", pin.tag, False, f"updated to {pin.tag}")
-
-
-def pack_install_writes(home, router_ref, seen):
-    def effect(argv):
-        seen.append(yaml.safe_load(Path(argv[-1]).read_text()))
-        meta = {"polytropos": {"source": "https://github.com/Lil-Clanky/polytropos#plugins/polytropos",
-                               "revision": SHA_NEW},
-                "polytropos-router": {"source": "https://github.com/Lil-Clanky/polytropos#plugins/polytropos_router",
-                                      "revision": router_ref}}
-        (home / "plugins").mkdir(parents=True, exist_ok=True)
-        (home / "plugins" / ".install-metadata.json").write_text(json.dumps(meta))
-    return effect
 
 
 def default_integrations(home):
@@ -388,80 +361,22 @@ def managed_state(home):
     save_state(state)
 
 
-def test_update_goes_on_when_only_ponytail_failed_in_the_pack_install(tmp_home, capsys):
-    home, seen = tmp_home / ".hermes", []
-    managed_state(home)
-    pack_cmd = ("hermes", "plugins", "pack", "install")
-    run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
-                            "ast-grep": LOCK["ast-grep"]["version"]},
-                  fail=[pack_cmd], on={pack_cmd: pack_install_writes(home, SHA_NEW, seen)})
-    fl = FakeFreeLLM()
-    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", pack_text(), new_lock_text()), ask=lambda q: "y", freellm=fl)
-    assert cli.handle(parse("update"), fx) == 0
-    cmds = run.commands()
-    assert [c[:5] for c in cmds if c[:4] == list(pack_cmd)] == [[*pack_cmd, "--force"]]
-    assert seen[0]["plugins"][0]["ref"] == SHA_NEW
-    ponytail = home / "plugins" / "ponytail"
-    assert ["git", "clone", LOCK["plugins"]["ponytail"]["repo"], str(ponytail)] in cmds
-    assert ["hermes", "plugins", "enable", "ponytail"] in cmds
-    assert ["uv", "tool", "install", f"git+{LOCK['stack-canary']['repo']}@{'d' * 40}"] in cmds
-    assert fl.updates[0][0] == Pin("v0.16.40", LOCK["freellmapi"]["commit"])
-    assert "hermes gateway restart" in capsys.readouterr().out
-
-
-def test_update_stops_when_an_own_plugin_is_at_another_revision(tmp_home, capsys):
-    home, seen = tmp_home / ".hermes", []
-    managed_state(home)
-    pack_cmd = ("hermes", "plugins", "pack", "install")
-    run = FakeRun(fail=[pack_cmd], on={pack_cmd: pack_install_writes(home, SHA_OLD, seen)})
-    fl = FakeFreeLLM()
-    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", pack_text(), new_lock_text()), ask=lambda q: "y", freellm=fl)
-    assert cli.handle(parse("update"), fx) == 1
-    assert "polytropos-router is at aaaaaaa" in capsys.readouterr().out
-    assert [c for c in run.commands() if c[:4] != list(pack_cmd)] == []
-    assert fl.updates == []
-
-
-def test_update_repairs_a_missing_pack_plugin_and_leaves_a_complete_home_alone(tmp_home, capsys):
+def test_update_moves_ponytail_programs_and_freellmapi_to_the_installed_pins(tmp_home, monkeypatch, capsys):
+    installed_lock(monkeypatch, tmp_home, new_lock_text())  # the pins of the installed plugin, nothing from GitHub
     home = tmp_home / ".hermes"
-    superpowers = LOCK["plugins"]["superpowers"]
-    pack = yaml.safe_load(pack_text())
-    pack["plugins"].append({"repo": "obra/superpowers", "ref": superpowers["commit"]})
-    own = "https://github.com/Lil-Clanky/polytropos.git#plugins/"
-    meta = {"polytropos": {"source": own + "polytropos", "revision": SHA_NEW},
-            "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW},
-            "ponytail": {"source": "https://github.com/DietrichGebert/ponytail.git", "revision": "c" * 40}}
-    (home / "plugins" / "ponytail").mkdir(parents=True)
-    default_integrations(home)
-    meta_path = home / "plugins" / ".install-metadata.json"
-    meta_path.write_text(json.dumps(meta))
-    versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
-                "ast-grep": LOCK["ast-grep"]["version"], "canary": ""}
-    run, asked = FakeRun(versions=versions), []
-    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", yaml.safe_dump(pack), new_lock_text()),
-                     ask=lambda q: asked.append(capsys.readouterr().out) or "y")  # what was printed before it
+    managed_state(home)
+    run = FakeRun(versions={"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
+                            "ast-grep": LOCK["ast-grep"]["version"]})
+    fl, asked = FakeFreeLLM(), []
+    fx = cli.Effects(run=run, ask=lambda q: asked.append(q) or "y", freellm=fl)
     assert cli.handle(parse("update"), fx) == 0
-    [before] = asked
-    assert "  changes: plugin obra/superpowers is not installed" in before and FORCE_NOTE in before
-    pack_cmd = ["hermes", "plugins", "pack", "install", "--force"]
-    assert [c[:5] for c in run.commands() if c[:2] == ["hermes", "plugins"] or c[0] == "git"] == [pack_cmd]
-    capsys.readouterr()
-
-    meta["superpowers"] = {"source": "https://github.com/obra/superpowers.git", "revision": superpowers["commit"]}
-    meta_path.write_text(json.dumps(meta))
-    same_lock = (ROOT / "versions.lock").read_text()  # nothing new: the release pins what is installed
-    state = load_state()  # stack-canary too, at the commit that install records
-    use_shared(state, "stack-canary", str(home), version=LOCK["stack-canary"]["ref"][:7], installed_by_us=True)
-    save_state(state)
-    fx.run, fx.fetch = (run := FakeRun(versions=versions)), fetcher("v0.2.0", yaml.safe_dump(pack), same_lock)
-    assert cli.handle(parse("update"), fx) == 0
-    out = asked[-1] + capsys.readouterr().out
-    assert "changes:" not in out and "hermes gateway restart" not in out and FORCE_NOTE not in out
-    assert run.commands() == []
-
-
-FORCE_NOTE = ("Update reinstalls the plugins with --force, so Hermes also installs a plugin with a caution verdict "
-              "from its scan without printing the findings, and a dangerous verdict still stops the plugin.")
+    assert asked[0] == "Update ponytail, the programs and FreeLLMAPI to the versions Polytropos pins? [y/N] "
+    cmds = run.commands()
+    assert ["git", "clone", LOCK["plugins"]["ponytail"]["repo"], str(home / "plugins" / "ponytail")] in cmds
+    assert ["uv", "tool", "install", f"git+{LOCK['stack-canary']['repo']}@{'d' * 40}"] in cmds
+    assert not [c for c in cmds if c[:2] == ["hermes", "plugins"] and c[2] != "enable"]  # no plugin reinstall
+    assert fl.updates[0][0] == Pin("v0.16.40", LOCK["freellmapi"]["commit"])
+    assert cli.PLUGIN_UPDATES in capsys.readouterr().out
 
 
 def test_update_never_adds_an_integration_the_profile_lacks(tmp_home):
@@ -473,7 +388,7 @@ def test_update_never_adds_an_integration_the_profile_lacks(tmp_home):
     versions = {"rtk": LOCK["rtk"]["version"], "graphify": "0.0.1", "ast-grep": LOCK["ast-grep"]["version"],
                 "canary": ""}
     run = FakeRun(versions=versions)
-    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, fetch=no_fetch, ask=lambda q: "y")) == 0
+    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, ask=lambda q: "y")) == 0
     assert run.commands() == [["uv", "tool", "install", f"graphifyy=={LOCK['graphify']['version']}"]]
     run = FakeRun(versions=versions)  # install adds them
     assert cli.handle(parse("install", "--only", "rtk", "graphify"), cli.Effects(run=run, ask=no_questions)) == 0
@@ -489,7 +404,7 @@ def test_update_asks_before_it_installs_a_missing_ponytail(tmp_home):
     (home / "plugins" / ".install-metadata.json").write_text(json.dumps({
         "polytropos": {"source": own + "polytropos", "revision": SHA_NEW},
         "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW}}))
-    answers = {"Update the plugins": "y", "ponytail is not installed": "n"}
+    answers = {"Update ponytail": "y", "ponytail is not installed": "n"}
     asked = []
 
     def ask(question):
@@ -497,7 +412,7 @@ def test_update_asks_before_it_installs_a_missing_ponytail(tmp_home):
         return next(a for start, a in answers.items() if question.startswith(start))
 
     run = FakeRun()
-    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", pack_text(), (ROOT / "versions.lock").read_text()), ask=ask)
+    fx = cli.Effects(run=run, ask=ask)
     cli.handle(parse("update", "all"), fx)
     assert "ponytail is not installed. Install it from its pinned commit? [y/N] " in asked
     assert not [c for c in run.commands() if c[0] == "git" or c[:3] == ["hermes", "plugins", "enable"]]
@@ -518,10 +433,9 @@ def test_update_and_install_move_a_ponytail_clone_to_the_lock_commit(tmp_home):
     versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
                 "ast-grep": LOCK["ast-grep"]["version"], "canary": ""}
     run = FakeRun(versions=versions)
-    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", pack_text(), (ROOT / "versions.lock").read_text()),
-                     ask=lambda q: "y")
+    fx = cli.Effects(run=run, ask=lambda q: "y")
     assert cli.handle(parse("update"), fx) == 0
-    assert [c for c in run.commands() if c[0] == "git"] == [head, *move]  # the plugin check reads HEAD first
+    assert [c for c in run.commands() if c[0] == "git"] == move
     run = FakeRun()
     assert cli.handle(parse("install", "--only", "ponytail"), cli.Effects(run=run, ask=no_questions)) == 0
     assert run.commands() == move
@@ -535,21 +449,17 @@ def installed_lock(monkeypatch, tmp_home, text):
     monkeypatch.setattr(cli, "_HERE", plugin / "cli.py")
 
 
-def no_fetch(url):
-    pytest.fail(f"fetched {url}")
-
-
 def test_update_programs_uses_the_installed_plugins_pins_and_fetches_nothing(tmp_home, monkeypatch):
     installed_lock(monkeypatch, tmp_home, new_lock_text())
     default_integrations(tmp_home / ".hermes")
     versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
                 "ast-grep": LOCK["ast-grep"]["version"]}
     run = FakeRun(versions=versions)
-    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, fetch=no_fetch, ask=lambda q: "y")) == 0
+    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, ask=lambda q: "y")) == 0
     assert run.commands() == [["uv", "tool", "install", f"git+{LOCK['stack-canary']['repo']}@{'d' * 40}"]]
     assert load_state().shared["stack-canary"]["version"] == "d" * 7  # the commit it installed
     run = FakeRun(versions={**versions, "canary": ""})
-    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, fetch=no_fetch, ask=lambda q: "y")) == 0
+    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, ask=lambda q: "y")) == 0
     assert run.commands() == []
 
 
@@ -557,7 +467,7 @@ def test_update_freellmapi_shows_both_tags_and_the_compare_link_before_it_asks(t
     installed_lock(monkeypatch, tmp_home, new_lock_text())  # the installed plugin's pins; no release is fetched
     managed_state(tmp_home / ".hermes")
     before, fl, run, asked = load_state(), FakeFreeLLM(), FakeRun(), []
-    fx = cli.Effects(run=run, fetch=no_fetch, ask=lambda q: asked.append(q) or "n", freellm=fl)
+    fx = cli.Effects(run=run, ask=lambda q: asked.append(q) or "n", freellm=fl)
     assert cli.handle(parse("update", "freellmapi"), fx) == 0
     out = capsys.readouterr().out
     assert "FreeLLMAPI v0.16.36 is installed, and Polytropos pins FreeLLMAPI v0.16.40." in out
@@ -820,11 +730,6 @@ def test_commands_that_cannot_start_are_reported_and_keep_the_state(tmp_home, ca
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 1
     assert f"Restoring {R}routes.complex failed" in capsys.readouterr().out
     assert [c["key"] for c in config_changes(load_state(), str(home))] == [R + "routes.complex"]
-    run = FakeRun(on={("hermes", "plugins"): missing})
-    fx = cli.Effects(run=run, fetch=fetcher("v0.2.0", pack_text(), new_lock_text()), ask=lambda q: "y")
-    assert cli.handle(parse("update"), fx) == 1
-    out = capsys.readouterr().out
-    assert "No such file or directory: 'hermes'" in out and "The plugin update did not finish" in out
     fx = cli.Effects(run=FakeRun(fail=[("npm",)]), ask=no_questions)
     assert cli.handle(parse("install", "--only", "qmd"), fx) == 1
     assert "qmd was not installed: Command '['npm', 'install', '-g'" in capsys.readouterr().out

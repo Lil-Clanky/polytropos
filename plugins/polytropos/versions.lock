@@ -60,7 +60,7 @@ ref = "5063da2f359f1445da4bd52b3433d4f91d356761"
 # Hermes v0.23.2): 0.40.16.
 # darwin_sha256: digest of the release asset ollama-darwin.tgz of v0.40.16, from
 # `gh release view v0.40.16 -R ollama/ollama --json assets` (the asset stack-canary tests).
-# macOS installs that asset; Linux runs the official install script at this version.
+# macOS installs that asset. On Linux Polytropos leaves the install to the user.
 [ollama]
 version = "0.40.16"
 darwin_sha256 = "a743717494315da7cd352982b805f6b992d4b4452ca117fd5fbf86c4ee46fca0"

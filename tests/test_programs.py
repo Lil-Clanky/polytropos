@@ -114,7 +114,6 @@ def test_matching_version_is_skipped():
 def test_ollama_only_when_missing():
     ol = by_name(P.programs(LOCK, platform="linux", machine="x86_64"))["ollama"]
     assert P.needs_install(ol, lambda *a, **k: proc("ollama version is 0.30.0\n")) is False
-    assert "OLLAMA_VERSION=0.40.16" in ol.install_cmds[0][-1]
 
 
 def test_rtk_install_verifies_places_and_inits(tmp_home):
@@ -230,3 +229,11 @@ def test_macos_ollama_unsafe_member_leaves_nothing(tmp_home):
         P.install(darwin_ollama(data), lambda *a, **k: proc(), download=lambda url, dest: dest.write_bytes(data))
     assert not (tmp_home / ".local" / "bin").exists()
     assert not (tmp_home / "evil").exists()
+
+
+def test_linux_ollama_is_left_to_the_user_and_runs_nothing():
+    ol = by_name(P.programs(LOCK, platform="linux", machine="x86_64"))["ollama"]
+    calls = []
+    with pytest.raises(ValueError, match="does not install Ollama on Linux"):
+        P.install(ol, lambda cmd, **k: calls.append(cmd) or proc())
+    assert calls == []

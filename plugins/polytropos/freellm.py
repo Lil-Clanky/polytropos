@@ -80,10 +80,10 @@ class RestartFailed(Exception):
 def api_key() -> str | None:
     """This profile's FREELLMAPI_API_KEY, read the way the router reads it. Callers never print it."""
     try:
-        from hermes_cli.config import get_env_value  # reads the active profile's .env
+        from agent.secret_scope import get_secret  # the active profile's secret, as Hermes resolves it
     except ImportError:  # outside Hermes
         return os.environ.get("FREELLMAPI_API_KEY")
-    return get_env_value("FREELLMAPI_API_KEY")
+    return get_secret("FREELLMAPI_API_KEY")
 
 
 def _default_get(url: str, headers: dict) -> tuple[int, bytes]:
