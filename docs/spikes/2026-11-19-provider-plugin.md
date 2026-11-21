@@ -13,7 +13,7 @@ nested under `model-providers/`, and installed by a pack from a local git reposi
 stays a provider plugin and the proxy fallback is not needed.
 
 One safety check failed. After the last Hermes run, `launch_snapshot()` showed one new launchd
-label, `com.nousresearch.hermes.runtime.88aa2a063f73`. Hermes created it for the sandbox home
+label, `com.nousresearch.hermes.runtime.<hex>`. Hermes created it for the sandbox home
 when a one-shot run started its background gateway. See "Launchd difference" below. By the
 controller's ruling the job stays in place, and Task 24 leaves such labels out of its comparison.
 
@@ -484,11 +484,11 @@ maintainer's gateway stays untouched: `ai.hermes.gateway` kept its pid `<pid>`, 
 ## Launchd difference
 
 `launch_snapshot()` before the first Hermes run had 33 entries; after the last run it had 34. Added:
-`com.nousresearch.hermes.runtime.88aa2a063f73`. Nothing was removed, and no file was added to or
-removed from `~/Library/LaunchAgents`. `launchctl print gui/<uid>/com.nousresearch.hermes.runtime.88aa2a063f73`
+`com.nousresearch.hermes.runtime.<hex>`. Nothing was removed, and no file was added to or
+removed from `~/Library/LaunchAgents`. `launchctl print gui/<uid>/com.nousresearch.hermes.runtime.<hex>`
 shows `type = LaunchAgent`, `state = not running`, `program = /usr/bin/osascript`, the arguments
 `... gateway run --quiet --idle-exit >> .../.sandbox/turns/hermes/logs/gateway-stdio.log ...` and
-`path = .../.sandbox/turns/hermes/logs/.com.nousresearch.hermes.runtime.88aa2a063f73.plist`, a file
+`path = .../.sandbox/turns/hermes/logs/.com.nousresearch.hermes.runtime.<hex>.plist`, a file
 that no longer exists. It is the job of the last sandbox daemon. Its label ends in random hex
 (`uuid4`, `hermes_cli/gateway_launchd_runtime.py:107`). The job is inert, and the next unmanaged
 gateway start of any Hermes home removes finished jobs like it (`:91-97`). By the controller's
