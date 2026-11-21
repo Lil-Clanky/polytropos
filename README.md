@@ -1,5 +1,7 @@
 # Polytropos
 
+![Odysseus turns a switch between a local chip and the cloud](docs/images/banner.webp)
+
 Polytropos is a plugin pack for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It sets up an existing Hermes install to use free cloud models through [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) and small local models through [Ollama](https://ollama.com), on macOS and Linux.
 
 The pack has two plugins of its own.
