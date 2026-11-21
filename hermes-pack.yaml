@@ -9,10 +9,10 @@ author: Lil-Clanky
 version: 0.1.1
 plugins:
   - repo: Lil-Clanky/polytropos
-    ref: 3f2a8f6e3494080a459841987c677648098c78d0
+    ref: efbc54f6930f49bc7b86a048e4be2a046acd235a
     subdir: plugins/polytropos
   - repo: Lil-Clanky/polytropos
-    ref: 3f2a8f6e3494080a459841987c677648098c78d0
+    ref: efbc54f6930f49bc7b86a048e4be2a046acd235a
     subdir: plugins/polytropos_router
   - repo: DietrichGebert/ponytail
     ref: 7801d061243d7b753bad0e0b3c057cd250b11755
