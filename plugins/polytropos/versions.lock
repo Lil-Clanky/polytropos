@@ -5,8 +5,8 @@
 # tag and commit: git ls-remote --tags https://github.com/tashfeenahmed/freellmapi (v0.16.36).
 # cli_version: npm view freellmapi version (the npm CLI has its own version line).
 [freellmapi]
-tag = "v0.16.36"
-commit = "dd0fb71351746ed7bfcbe061a7aa7c6bdb291e1d"
+tag = "v0.16.40"
+commit = "7619c8fee886eeba8f28c84d5fc943f4459c1fbc"
 node = ">=20.18.0 <25.0.0"
 cli_version = "0.8.2"
 
