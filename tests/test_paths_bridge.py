@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import sys
 import threading
 from pathlib import Path
@@ -46,21 +47,47 @@ def test_hermes_home_env_and_default(tmp_home, monkeypatch):
     assert paths.hermes_home() == tmp_home / "AppData" / "Local" / "hermes"
 
 
-def test_freellmapi_port_is_the_one_the_desktop_app_saved_on_windows(tmp_path, monkeypatch):
+def test_freellmapi_port_is_the_one_the_desktop_app_saved_on_windows(tmp_home, monkeypatch):
     monkeypatch.setattr(paths.sys, "platform", "linux")
     assert paths.freellmapi_port() == 3001  # the service Polytropos runs
     monkeypatch.setattr(paths.sys, "platform", "win32")
     monkeypatch.delenv("APPDATA", raising=False)
     assert paths.freellmapi_port() == 31415
-    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_home))
     assert paths.freellmapi_port() == 31415  # the app has not run yet
-    config = tmp_path / "FreeLLMAPI" / "config.json"
+    config = tmp_home / "FreeLLMAPI" / "config.json"
     config.parent.mkdir()
     config.write_text('{"theme": "dark", "port": 31416}', encoding="utf-8")  # as desktop/src/config.ts writes it
     assert paths.freellmapi_port() == 31416
     for other in ('{"port": "31416"}', '{"port": 0}', '{"theme": "dark"}', "[]", "{"):
         config.write_text(other, encoding="utf-8")
         assert paths.freellmapi_port() == 31415
+
+
+def test_freellmapi_port_of_the_store_app_comes_from_its_package_folder(tmp_home, monkeypatch):
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_home / "AppData" / "Roaming"))
+
+    def save(roaming, text, mtime):
+        config = roaming / "FreeLLMAPI" / "config.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(text, encoding="utf-8")
+        os.utime(config, (mtime, mtime))
+        return config
+
+    packages = tmp_home / "AppData" / "Local" / "Packages"  # Windows redirects a Store app's %APPDATA% writes here
+    save(packages / "TashAhmed.FreeLLMAPI_old" / "LocalCache" / "Roaming", '{"port": 31417}', 1)
+    assert paths.freellmapi_port() == 31417
+    newest = save(packages / "TashAhmed.FreeLLMAPI_new" / "LocalCache" / "Roaming", '{"port": 31418}', 2)
+    assert paths.freellmapi_port() == 31418  # the most recently written of several
+    plain = save(tmp_home / "AppData" / "Roaming", '{"port": 31416}', 0)
+    assert paths.freellmapi_port() == 31416  # the plain %APPDATA% file comes first
+    plain.write_text("{", encoding="utf-8")
+    newest.write_text('{"theme": "dark"}', encoding="utf-8")
+    os.utime(newest, (2, 2))
+    assert paths.freellmapi_port() == 31417  # files without a port are passed over
+    monkeypatch.delenv("LOCALAPPDATA")
+    assert paths.freellmapi_port() == 31415  # nothing to look in, and no home lookup when the plugins load
 
 
 def test_message_text_handles_parts():

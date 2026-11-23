@@ -40,14 +40,26 @@ def hermes_home() -> Path:
     return Path(os.environ["HERMES_HOME"]) if os.environ.get("HERMES_HOME") else default_hermes_home()
 
 
+def _saved_port(config: Path) -> int | None:
+    try:
+        port = json.loads(config.read_text(encoding="utf-8"))["port"]
+    except (KeyError, TypeError, ValueError, OSError):  # no file yet, or not the shape config.ts writes
+        return None
+    return port if type(port) is int and 0 < port < 65536 else None
+
+
 def freellmapi_port() -> int:
     """3001, where Polytropos runs FreeLLMAPI. On Windows the desktop app's port: the app moves to the next free port
     when its port is taken and saves the one it got as "port" in %APPDATA%\\FreeLLMAPI\\config.json (config.ts)."""
     if sys.platform != "win32":
         return 3001
+    plain = [Path(os.environ["APPDATA"]) / "FreeLLMAPI" / "config.json"] if os.environ.get("APPDATA") else []
+    # Windows redirects the %APPDATA% writes of the Store (MSIX) app into its package folder; the newest copy counts.
+    # This runs when the plugins load, so a missing variable or an unreadable folder only means no copy.
+    local = os.environ.get("LOCALAPPDATA")
     try:
-        port = json.loads((Path(os.environ["APPDATA"]) / "FreeLLMAPI" / "config.json").read_text(encoding="utf-8"))
-        port = port["port"]
-    except (KeyError, TypeError, ValueError, OSError):  # no file yet, or not the shape config.ts writes
-        return FREELLMAPI_DESKTOP_PORT
-    return port if type(port) is int and 0 < port < 65536 else FREELLMAPI_DESKTOP_PORT
+        stored = sorted(Path(local).glob("Packages/*/LocalCache/Roaming/FreeLLMAPI/config.json"),
+                        key=lambda config: config.stat().st_mtime, reverse=True) if local else []
+    except OSError:
+        stored = []
+    return next((port for config in plain + stored if (port := _saved_port(config))), FREELLMAPI_DESKTOP_PORT)
