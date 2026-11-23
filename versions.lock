@@ -8,7 +8,7 @@
 tag = "v0.16.36"
 commit = "dd0fb71351746ed7bfcbe061a7aa7c6bdb291e1d"
 node = ">=20.18.0 <25.0.0"
-cli_version = "0.8.2"
+cli_version = "0.8.4"
 
 # rtk, license Apache-2.0 (the archive also ships LICENSE-ENGINE).
 # Repository found from the Homebrew formula homepage (rtk-ai.app) and the GitHub API.
