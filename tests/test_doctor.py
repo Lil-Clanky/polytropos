@@ -92,17 +92,14 @@ def test_plugins_match_records_by_source(ctx):
     assert [r.status for r in got] == ["fail"] * 3 and "not installed" in got[1].label
 
 
-def test_plugins_cloned_without_the_installer_are_checked_by_their_git_head(ctx):
+def test_a_ponytail_clone_without_an_install_record_is_not_installed(ctx):
     pin = LOCK["plugins"]["ponytail"]
-    folder = ctx.hermes_home / "plugins" / "ponytail"
-    (folder / ".git").mkdir(parents=True)
+    (ctx.hermes_home / "plugins" / "ponytail" / ".git").mkdir(parents=True)  # as Polytropos 0.1.1 cloned it
     ctx.pack = {"plugins": [{"repo": pin["repo"], "ref": pin["commit"], "name": "ponytail"}]}
-    calls, heads = [], iter([pin["commit"] + "\n", "c" * 40 + "\n"])
-    ctx.run = lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0, stdout=next(heads), stderr="")
-    assert only(d.check_plugins(ctx)).label == "plugins: ponytail"
+    ctx.run = lambda argv, **kw: pytest.fail(f"unexpected command: {argv}")
     r = only(d.check_plugins(ctx))
-    assert r.status == "warn" and "ponytail is at ccccccc" in r.label
-    assert calls[0] == ["git", "-C", str(folder), "rev-parse", "HEAD"]
+    assert r.status == "fail" and r.label == "plugin DietrichGebert/ponytail is not installed"
+    assert r.fix == "hermes polytropos install --only ponytail"
 
 
 def test_freellmapi_not_running(ctx):

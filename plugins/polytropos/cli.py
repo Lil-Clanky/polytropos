@@ -315,33 +315,27 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
     return True
 
 
-def _ponytail(home: Path, lock: dict, fx: Effects) -> bool:
+def _ponytail(lock: dict, fx: Effects, *, force: bool = False) -> bool:
     try:
-        programs.ponytail_fallback(home, lock, fx.run)
+        programs.ponytail_fallback(lock, fx.run, force=force)
     except (subprocess.CalledProcessError, OSError) as err:
         print(f"ponytail was not installed: {err}")
         return False
-    print("ponytail is installed.")
+    print(f"ponytail is installed at {lock['plugins']['ponytail']['commit'][:7]}.")
     return True
 
 
 def _move_ponytail(home: Path, lock: dict, fx: Effects) -> bool:
-    """Move a clone that programs.ponytail_fallback made, which Hermes keeps no record of, to the lock's commit."""
-    pin, folder = lock["plugins"]["ponytail"], home / "plugins" / "ponytail"
+    """Reinstall ponytail through Hermes when its install record has another commit than the lock, or when there is no
+    record, as for the clone that Polytropos 0.1.1 made."""
+    pin = lock["plugins"]["ponytail"]
     try:
-        recorded = doctor._repo_subdir(pin["repo"]) in doctor.install_records(home)
-    except (OSError, ValueError):  # unreadable records: the doctor reports them, and the clone stays as it is
+        record = doctor.install_records(home).get(doctor._repo_subdir(pin["repo"]))
+    except (OSError, ValueError):  # unreadable records: the doctor reports them, and ponytail stays as it is
         return True
-    if recorded or not (folder / ".git").exists() or doctor._git_head(fx.run, folder) == pin["commit"]:
+    if record and str(record[1].get("revision") or "").lower() == pin["commit"]:
         return True
-    try:
-        for step in (["fetch", "--depth", "1", "origin", pin["commit"]], ["checkout", pin["commit"]]):
-            fx.run(["git", "-C", str(folder), *step], check=True)
-    except (subprocess.CalledProcessError, OSError) as err:
-        print(f"ponytail was not moved to {pin['commit'][:7]}: {err}")
-        return False
-    print(f"ponytail is now at {pin['commit'][:7]}.")
-    return True
+    return _ponytail(lock, fx, force=True)
 
 
 def _install(args, fx: Effects) -> int:
@@ -384,7 +378,7 @@ def _install(args, fx: Effects) -> int:
         if (home / "plugins" / "ponytail").is_dir():
             failed += not _move_ponytail(home, lock, fx)
         elif "ponytail" in only or _yes(fx, PONYTAIL_QUESTION):
-            failed += not _ponytail(home, lock, fx)
+            failed += not _ponytail(lock, fx)
     for p in progs:
         chosen = p.name in only if only else not p.optional or args.all_optional or _yes(fx, f"Install {p.name}?")
         if chosen and not _install_program(p, state, profile, fx):
@@ -498,7 +492,7 @@ def _update(args, fx: Effects) -> int:
         if (home / "plugins" / "ponytail").is_dir():
             failed += not _move_ponytail(home, lock, fx)
         elif _yes(fx, PONYTAIL_QUESTION):
-            failed += not _ponytail(home, lock, fx)
+            failed += not _ponytail(lock, fx)
     if args.component in ("programs", "all"):
         failed += _update_programs(lock, state, profile, fx)
     if args.component in ("freellmapi", "all"):

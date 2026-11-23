@@ -98,17 +98,9 @@ def install_records(hermes_home: Path) -> dict:
     return {_repo_subdir(str(r.get("source") or "")): (name, r) for name, r in metadata.items() if isinstance(r, dict)}
 
 
-def _git_head(run: Callable, folder: Path) -> str:
-    try:
-        return run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True,
-                   check=False).stdout.strip()
-    except OSError:  # git is not installed
-        return ""
-
-
 def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
-    """Each pack entry against its install record. An entry with a name may also be a git clone in plugins/<name>.
-    An entry without a ref counts as not installed: the own plugins have none when the general plugin has no record."""
+    """Each pack entry against its install record. An entry without a ref counts as not installed: the own plugins
+    have none when the general plugin has no record."""
     try:
         installed = install_records(ctx.hermes_home)
     except (OSError, ValueError) as e:
@@ -119,10 +111,6 @@ def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
         key = _repo_subdir(str(entry["repo"]), entry.get("subdir") or "")
         pinned = str(entry["ref"]).lower()
         label = key[0] + (f"#{key[1]}" if key[1] else "")
-        folder = ctx.hermes_home / "plugins" / entry.get("name", "")
-        if key not in installed and entry.get("name") and (folder / ".git").exists():
-            # programs.ponytail_fallback clones without Hermes's installer, which leaves no record
-            installed[key] = (entry["name"], {"revision": _git_head(ctx.run, folder)})
         if key not in installed or not pinned:
             fix = ("install Polytropos again, see Install in its README" if key[0] == "Lil-Clanky/polytropos"
                    else "hermes polytropos install --only ponytail" if entry.get("name") == "ponytail"

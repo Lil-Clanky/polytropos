@@ -369,9 +369,10 @@ def test_update_moves_ponytail_programs_and_freellmapi_to_the_installed_pins(tmp
     assert cli.handle(parse("update"), fx) == 0
     assert asked[0] == "Update ponytail, the programs and FreeLLMAPI to the versions Polytropos pins? [y/N] "
     cmds = run.commands()
-    assert ["git", "clone", LOCK["plugins"]["ponytail"]["repo"], str(home / "plugins" / "ponytail")] in cmds
+    ponytail = LOCK["plugins"]["ponytail"]
+    assert ["hermes", "plugins", "install", ponytail["repo"], "--ref", ponytail["commit"], "--enable"] in cmds
     assert ["uv", "tool", "install", f"git+{LOCK['stack-canary']['repo']}@{'d' * 40}"] in cmds
-    assert not [c for c in cmds if c[:2] == ["hermes", "plugins"] and c[2] != "enable"]  # no plugin reinstall
+    assert not [c for c in cmds if c[:2] == ["hermes", "plugins"] and c[3] != ponytail["repo"]]  # no own plugin
     assert fl.updates[0][0] == Pin("v0.16.40", LOCK["freellmapi"]["commit"])
     assert cli.PLUGIN_UPDATES in capsys.readouterr().out
 
@@ -412,30 +413,30 @@ def test_update_asks_before_it_installs_a_missing_ponytail(tmp_home):
     fx = cli.Effects(run=run, ask=ask)
     cli.handle(parse("update", "all"), fx)
     assert "ponytail is not installed. Install it from its pinned commit? [y/N] " in asked
-    assert not [c for c in run.commands() if c[0] == "git" or c[:3] == ["hermes", "plugins", "enable"]]
+    assert not [c for c in run.commands() if c[:3] == ["hermes", "plugins", "install"]]
 
 
-def test_update_and_install_move_a_ponytail_clone_to_the_lock_commit(tmp_home):
+@pytest.mark.parametrize("revision, moved",
+                         [(None, True), (SHA_OLD, True), (LOCK["plugins"]["ponytail"]["commit"], False)])
+def test_update_and_install_reinstall_a_ponytail_at_another_commit(tmp_home, revision, moved):
     home = tmp_home / ".hermes"
-    folder = home / "plugins" / "ponytail"
-    (folder / ".git").mkdir(parents=True)  # programs.ponytail_fallback's clone, which Hermes keeps no record of
+    pin = LOCK["plugins"]["ponytail"]
+    (home / "plugins" / "ponytail" / ".git").mkdir(parents=True)  # without a record: the clone of Polytropos 0.1.1
     own = "https://github.com/Lil-Clanky/polytropos.git#plugins/"
-    (home / "plugins" / ".install-metadata.json").write_text(json.dumps({
-        "polytropos": {"source": own + "polytropos", "revision": SHA_NEW},
-        "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW}}))
-    commit = LOCK["plugins"]["ponytail"]["commit"]
-    head = ["git", "-C", str(folder), "rev-parse", "HEAD"]  # FakeRun prints nothing, so the clone is elsewhere
-    move = [head, ["git", "-C", str(folder), "fetch", "--depth", "1", "origin", commit],
-            ["git", "-C", str(folder), "checkout", commit]]
+    meta = {"polytropos": {"source": own + "polytropos", "revision": SHA_NEW},
+            "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW}}
+    if revision:
+        meta["ponytail"] = {"source": pin["repo"], "revision": revision, "pinned": True}
+    (home / "plugins" / ".install-metadata.json").write_text(json.dumps(meta))
+    reinstall = [["hermes", "plugins", "install", pin["repo"], "--ref", pin["commit"], "--force"]] if moved else []
     versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
                 "ast-grep": LOCK["ast-grep"]["version"], "canary": ""}
     run = FakeRun(versions=versions)
-    fx = cli.Effects(run=run, ask=lambda q: "y")
-    assert cli.handle(parse("update"), fx) == 0
-    assert [c for c in run.commands() if c[0] == "git"] == move
+    assert cli.handle(parse("update"), cli.Effects(run=run, ask=lambda q: "y")) == 0
+    assert [c for c in run.commands() if c[:2] == ["hermes", "plugins"]] == reinstall
     run = FakeRun()
     assert cli.handle(parse("install", "--only", "ponytail"), cli.Effects(run=run, ask=no_questions)) == 0
-    assert run.commands() == move
+    assert run.commands() == reinstall
 
 
 def installed_lock(monkeypatch, tmp_home, text):

@@ -27,7 +27,7 @@ The doctor reports what is still missing. `install` builds FreeLLMAPI at its pin
 ## What it runs and changes
 
 - FreeLLMAPI runs as a LaunchAgent on macOS or a systemd user unit on Linux, and listens on 127.0.0.1 only.
-- The commands run git, npm, npx, uv, `hermes config set`, `hermes mcp add`, `hermes plugins enable`, and `launchctl` or `systemctl --user`. Polytropos never runs `sudo`. On Linux it prints Ollama's install command for you to run.
+- The commands run git, npm, npx, uv, `hermes config set`, `hermes mcp add`, `hermes plugins install`, and `launchctl` or `systemctl --user`. Polytropos never runs `sudo`. On Linux it prints Ollama's install command for you to run.
 - Setup changes the profile's `config.yaml` and records the old values, so that `hermes polytropos uninstall` can put them back.
 - `hermes polytropos adopt` copies the database, `.env` and `.encryption-key` of a FreeLLMAPI checkout you name, so that FreeLLMAPI can still read its provider keys.
 - Keys are read through Hermes's secret scope. Polytropos sends no usage data anywhere.

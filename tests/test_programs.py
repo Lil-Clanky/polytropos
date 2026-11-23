@@ -173,14 +173,13 @@ def test_context7_mcp_step_falls_back_to_manual(capsys):
     assert "once Hermes is installed" not in out
 
 
-def test_ponytail_fallback_order(tmp_home):
+def test_ponytail_goes_through_hermes_plugins_install():
     calls = []
-    P.ponytail_fallback(tmp_home / ".hermes", LOCK, lambda cmd, **k: calls.append(cmd) or proc())
-    target = str(tmp_home / ".hermes" / "plugins" / "ponytail")
-    commit = LOCK["plugins"]["ponytail"]["commit"]
-    assert calls[0][:2] == ["git", "clone"] and calls[0][-1] == target
-    assert calls[1] == ["git", "-C", target, "checkout", commit]
-    assert calls[2] == ["hermes", "plugins", "enable", "ponytail"]
+    for force in (False, True):
+        P.ponytail_fallback(LOCK, lambda cmd, **k: calls.append(cmd) or proc(), force=force)
+    install = ["hermes", "plugins", "install", LOCK["plugins"]["ponytail"]["repo"],
+               "--ref", LOCK["plugins"]["ponytail"]["commit"]]
+    assert calls == [install + ["--enable"], install + ["--force"]]
 
 
 def tar_ollama(extra=()):

@@ -215,9 +215,9 @@ def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], N
         run(cmd, check=True)
 
 
-def ponytail_fallback(hermes_home: Path, lock: dict, run=subprocess.run) -> None:
+def ponytail_fallback(lock: dict, run=subprocess.run, *, force: bool = False) -> None:
+    """Install ponytail at the lock's commit through Hermes's installer, which scans it and records the install.
+    force replaces a ponytail that is there already and leaves whether it is enabled to Hermes."""
     pin = lock["plugins"]["ponytail"]
-    target = str(hermes_home / "plugins" / "ponytail")
-    run(["git", "clone", pin["repo"], target], check=True)
-    run(["git", "-C", target, "checkout", pin["commit"]], check=True)
-    run(["hermes", "plugins", "enable", "ponytail"], check=True)
+    run(["hermes", "plugins", "install", pin["repo"], "--ref", pin["commit"], "--force" if force else "--enable"],
+        check=True)
