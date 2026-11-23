@@ -46,6 +46,23 @@ def test_hermes_home_env_and_default(tmp_home, monkeypatch):
     assert paths.hermes_home() == tmp_home / "AppData" / "Local" / "hermes"
 
 
+def test_freellmapi_port_is_the_one_the_desktop_app_saved_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths.sys, "platform", "linux")
+    assert paths.freellmapi_port() == 3001  # the service Polytropos runs
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.delenv("APPDATA", raising=False)
+    assert paths.freellmapi_port() == 31415
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    assert paths.freellmapi_port() == 31415  # the app has not run yet
+    config = tmp_path / "FreeLLMAPI" / "config.json"
+    config.parent.mkdir()
+    config.write_text('{"theme": "dark", "port": 31416}', encoding="utf-8")  # as desktop/src/config.ts writes it
+    assert paths.freellmapi_port() == 31416
+    for other in ('{"port": "31416"}', '{"port": 0}', '{"theme": "dark"}', "[]", "{"):
+        config.write_text(other, encoding="utf-8")
+        assert paths.freellmapi_port() == 31415
+
+
 def test_message_text_handles_parts():
     parts = [{"type": "text", "text": "a"}, {"type": "image_url", "image_url": {}}, {"type": "text", "text": "b"}]
     assert message_text(parts) == "a\nb"

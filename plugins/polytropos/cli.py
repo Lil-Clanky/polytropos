@@ -46,7 +46,8 @@ WINDOWS_FREELLMAPI = (
     "On Windows FreeLLMAPI runs as its own desktop app, and Polytropos uses it as it is. Install it from the "
     "Microsoft Store (https://apps.microsoft.com/detail/9PBN6G8K2B7F), which keeps it updated, or from "
     "https://github.com/tashfeenahmed/freellmapi/releases, and open it. It serves the API on "
-    f"127.0.0.1:{DESKTOP_PORT}. Click its tray icon to open the dashboard: the Keys page shows the unified API key.")
+    f"127.0.0.1:{DESKTOP_PORT}, or the next free port. Click its tray icon to open the dashboard: the Keys page "
+    "shows the unified API key.")
 _HERE = Path(__file__).resolve()
 
 
