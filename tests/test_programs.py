@@ -61,7 +61,10 @@ def test_default_and_optional_sets():
     progs = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))
     assert {n for n, p in progs.items() if not p.optional} == {"rtk", "graphify", "ast-grep", "stack-canary"}
     assert {n for n, p in progs.items() if p.optional} == {"opencode", "qmd", "context7", "ollama"}
-    assert progs["graphify"].install_cmds[0] == ["uv", "tool", "install", "graphifyy==0.9.112"]
+    # From the lock, not a literal: the scheduled bump workflow raises the version and then runs these tests.
+    assert progs["graphify"].install_cmds[0] == [
+        "uv", "tool", "install", f"{LOCK['graphify']['package']}=={LOCK['graphify']['version']}"
+    ]
     assert progs["graphify"].install_cmds[1] == ["graphify", "install", "--platform", "hermes"]
     assert progs["ast-grep"].install_cmds[1] == ["hermes", "skills", "install", "official/software-development/ast-grep"]
     assert progs["stack-canary"].install_cmds == [
