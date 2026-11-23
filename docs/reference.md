@@ -1,6 +1,6 @@
 # Polytropos reference
 
-This reference covers Polytropos 0.1.1 on Hermes Agent v0.23.2. Paths are shown with their defaults. `$HERMES_HOME` is `~/.hermes`, and `$XDG_DATA_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are `~/.local/share`, `~/.local/state` and `~/.cache`. For a named Hermes profile the Hermes paths are under `~/.hermes/profiles/<name>/`. The install steps are in the [README](../README.md).
+This reference covers Polytropos 0.1.1 on Hermes Agent v0.23.2. Paths are shown with their defaults. `$HERMES_HOME` is `~/.hermes`, and `$XDG_DATA_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are `~/.local/share`, `~/.local/state` and `~/.cache`. For a named Hermes profile the Hermes paths are under `~/.hermes/profiles/<name>/`. On Windows `~` is `%USERPROFILE%`, `$HERMES_HOME` is `%LOCALAPPDATA%\hermes`, and Polytropos keeps its data, state and cache together in `%LOCALAPPDATA%\polytropos` unless the `XDG_*` variables are set. The install steps are in the [README](../README.md).
 
 - [Commands](#commands)
 - [How the router picks a model](#how-the-router-picks-a-model)
@@ -44,11 +44,11 @@ In a chat, `/polytropos` shows the same as `status`.
 |---|---|
 | Hermes | A `fail` when `hermes --version` shows no version. A `warn` for any version other than 0.23.2. |
 | Plugins | Compares Hermes's install records in `~/.hermes/plugins/.install-metadata.json` with the expected plugins. ponytail and superpowers are expected at their commits in `versions.lock`. polytropos and polytropos-router are expected at the commit in Hermes's install record of the polytropos plugin. Without that record, as when the plugin runs from a checkout, both count as not installed. A missing plugin is a `fail`. Its fix says to install Polytropos again for the own plugins and `hermes plugins install <repo> --ref <commit>` for superpowers. ponytail is the exception, because Hermes does not accept its `plugin.json` yet. A missing ponytail is a `warn` with the fix `hermes polytropos install --only ponytail`, and a ponytail folder without an install record, such as the clone that Polytropos 0.1.1 made, is an `info`. A plugin at another commit is a `warn`. |
-| FreeLLMAPI | Whether something answers on 127.0.0.1:3001 and whether it is FreeLLMAPI. Nothing on the port, or another program on it, is a `fail`. Then the doctor asks `/v1/models` with the profile's `FREELLMAPI_API_KEY` and never prints the key. A profile without the key, and a key that FreeLLMAPI refuses with 401, are a `warn` with the fix `hermes config set FREELLMAPI_API_KEY <key>`. Any other result is a `warn`. It names the HTTP status when FreeLLMAPI returned one, and otherwise says that FreeLLMAPI did not answer. The `ok` line shows the mode Polytropos runs FreeLLMAPI in, and in managed mode also the tag of the installed release. |
-| Node | `node --version` against FreeLLMAPI's range `>=20.18.0 <25.0.0`. A Node outside the range, or no Node, is a `fail` that says to install Node 22 or 24. In external mode it is an `info`, because Polytropos does not run FreeLLMAPI then. |
+| FreeLLMAPI | Whether something answers on 127.0.0.1:3001, or 127.0.0.1:31415 on Windows, and whether it is FreeLLMAPI. Nothing on the port, or another program on it, is a `fail`. Then the doctor asks `/v1/models` with the profile's `FREELLMAPI_API_KEY` and never prints the key. A profile without the key, and a key that FreeLLMAPI refuses with 401, are a `warn` with the fix `hermes config set FREELLMAPI_API_KEY <key>`. Any other result is a `warn`. It names the HTTP status when FreeLLMAPI returned one, and otherwise says that FreeLLMAPI did not answer. The `ok` line shows the mode Polytropos runs FreeLLMAPI in, and in managed mode also the tag of the installed release. |
+| Node | `node --version` against FreeLLMAPI's range `>=20.18.0 <25.0.0`. A Node outside the range, or no Node, is a `fail` that says to install Node 22 or 24. In external mode it is an `info`, because Polytropos does not run FreeLLMAPI then, and on Windows it is an `info` as well. |
 | Router | Each error in the `polytropos-router` settings is a `fail`. A cloud model whose window is below 64,000 tokens, and an upstream that does not answer on `<base_url>/models`, are a `warn`. A local upstream whose `/api/version` does not answer as Ollama gets an `info` line. The fit check covers Ollama only, so such an upstream gets the memory, swap and disk checks without it. |
 | Old router section | An `info` when `config.yaml` has a top-level `router:` section, as written by Hermes's closed router pull request. Polytropos ignores that section. |
-| Programs | The pinned programs that are present at their version, as one `ok` line with the version the doctor read for each. A missing default program or one at another version is a `warn`, and a missing optional program is an `info`. rtk is checked at `~/.local/bin/rtk`, so another rtk on the `PATH` does not count. stack-canary has no version flag. It counts as present at its pin when `canary run --help` works and the commit that `install` recorded in `state.json` is the pinned commit, and its line shows that commit. A stack-canary that runs without such a record is a `warn` that its commit is unknown. Ollama only has to be present, and its line shows the version found. |
+| Programs | The pinned programs that are present at their version, as one `ok` line with the version the doctor read for each. A missing default program or one at another version is a `warn`, and a missing optional program is an `info`. rtk is checked at `~/.local/bin/rtk`, or `~/.local/bin/rtk.exe` on Windows, so another rtk on the `PATH` does not count. stack-canary has no version flag. It counts as present at its pin when `canary run --help` works and the commit that `install` recorded in `state.json` is the pinned commit, and its line shows that commit. A stack-canary that runs without such a record is a `warn` that its commit is unknown. Ollama only has to be present, and its line shows the version found. |
 | Canary | For each local model with `runtime: ollama` in the routes, the stack-canary verdict for the installed Ollama version. A failed tool check is a `warn` that names an Ollama version that passes, when the matrix has one. No verdict is an `info`. Each model that failed `canary run` is a `warn` as well. |
 | Fit | Only on machines with 16 GB of RAM or less. A `warn` for each local model whose name says it has more than 3B parameters, such as the `8b` in `llama3.1:8b`, or whose upstream has a window above 8192 tokens. The warning adds that such a window serves short requests without tools, and that an agent turn with Hermes's default tools needs a window of about 20,000 tokens by the router's estimate. See [Window fit](#window-fit). |
 | Key files | A `warn` per folder for files in `~/Downloads`, `~/Desktop` and `~` whose names match `*key*.json`, `*keys*.json`, `*.env.bak`, `.env.backup*` or `*.env.backup*`. It lists names and permissions and does not open the files. |
@@ -64,7 +64,7 @@ When no check fails, `model.provider` in `config.yaml` is not `polytropos-router
 `hermes polytropos setup` runs these steps.
 
 1. It checks that the profile has `FREELLMAPI_API_KEY`, FreeLLMAPI's unified API key. Without it, setup prints `hermes config set FREELLMAPI_API_KEY <key>`, the command that stores the key in the profile's `.env`, and exits with status 1.
-2. In external mode it asks `FreeLLMAPI URL [http://127.0.0.1:3001]: `.
+2. In external mode it asks `FreeLLMAPI URL [http://127.0.0.1:3001]: `. On Windows the default is `http://127.0.0.1:31415`, the desktop app's port.
 3. It asks `Make the Polytropos router the default model (provider polytropos-router, model auto)? [y/N]`.
 4. It writes the router settings with `hermes config set`, in this order, so that the settings parse after each step. After a yes it also sets `model.provider` to `polytropos-router` and `model.default` to `auto`, and removes `model.context_length` with `hermes config unset`. Hermes v0.23.2 uses a configured `model.context_length` over the window that the provider reports (`agent/agent_init.py:1554-1598` and `agent/model_metadata.py:2218-2220` in Hermes's source). Left in place, it would replace the window that the router reports, see [Context window reported to Hermes](#context-window-reported-to-hermes).
 
@@ -88,7 +88,7 @@ Setup records every value it changes, with the old value, in `state.json`. A key
 
 Without `--only`, install handles FreeLLMAPI, ponytail and the programs, in that order.
 
-- **FreeLLMAPI.** When port 3001 answers and the answer is not FreeLLMAPI, install stops with status 1. When the Polytropos service already runs, it is kept. When another FreeLLMAPI answers, Polytropos records it in external mode and prints how to adopt it. Otherwise install checks Node, builds the pinned tag, writes `ENCRYPTION_KEY`, starts the service and waits up to 60 seconds for it to answer. See [FreeLLMAPI](#freellmapi).
+- **FreeLLMAPI.** When port 3001 answers and the answer is not FreeLLMAPI, install stops with status 1. When the Polytropos service already runs, it is kept. When another FreeLLMAPI answers, Polytropos records it in external mode and prints how to adopt it. Otherwise install checks Node, builds the pinned tag, writes `ENCRYPTION_KEY`, starts the service and waits up to 60 seconds for it to answer. On Windows install builds and checks nothing. It records external mode and prints where to get FreeLLMAPI's desktop app. See [FreeLLMAPI](#freellmapi).
 - **ponytail.** When `~/.hermes/plugins/ponytail` does not exist, install asks `ponytail is not installed. Install it from its pinned commit? [y/N]`, and with `--only ponytail` it does not ask. A yes runs `hermes plugins install https://github.com/DietrichGebert/ponytail --ref <commit> --enable` with the commit from `versions.lock`. Hermes scans ponytail first and asks before it installs a plugin with a `caution` verdict. `--enable` enables ponytail without Hermes's own question, and Hermes keeps an install record. Hermes refuses ponytail's `plugin.json` for now, see [Hermes v0.23.2 notes](#hermes-v0232-notes). Install then prints `ponytail was not installed, because Hermes does not accept ponytail's plugin.json yet.` and goes on, and this does not change its exit status. When the folder exists, install leaves ponytail as it is, with or without an install record. When Hermes's install record of ponytail has another commit than `versions.lock`, install prints the command that moves it, `hermes plugins install https://github.com/DietrichGebert/ponytail --ref <commit> --force`, and does not run it.
 - **Programs.** A default program is installed when it is missing or at another version. An optional program is installed after `Install <name>? [y/N]`. Ollama is installed only when no `ollama` is found. See [Programs and integrations](#programs-and-integrations).
 
@@ -100,7 +100,7 @@ When a part fails, install goes on with the next one and exits with status 1 at 
 
 ### adopt
 
-`hermes polytropos adopt --from PATH` turns a FreeLLMAPI checkout that you ran yourself into the Polytropos service.
+`hermes polytropos adopt --from PATH` turns a FreeLLMAPI checkout that you ran yourself into the Polytropos service. On Windows, where Polytropos runs no service, adopt changes nothing and exits with status 1.
 
 - Stop the old server first. adopt refuses while port 3001 answers.
 - adopt refuses when `~/.local/share/polytropos/freellmapi/data/` already holds FreeLLMAPI data. Clear that folder by hand first.
@@ -143,7 +143,7 @@ The command prints one line per model. It exits with status 1 when a model fails
 
 `hermes polytropos status`, and `/polytropos` in a chat, print up to three lines.
 
-- FreeLLMAPI on 127.0.0.1:3001, checked with the profile's `FREELLMAPI_API_KEY`.
+- FreeLLMAPI on 127.0.0.1:3001, or 127.0.0.1:31415 on Windows, checked with the profile's `FREELLMAPI_API_KEY`.
 - The memory guard verdict for local models.
 - The last router decision, when `save_traces` is on.
 
@@ -153,7 +153,7 @@ The command prints one line per model. It exits with status 1 when a model fails
 
 - It sets each config value that Polytropos changed in this profile back to its old value, newest change first. It uses `hermes config set`, or `hermes config unset` when the key did not exist before. Uninstall reads `config.yaml` again before each key, and a key that already has its old value is left alone. `model.provider` comes back before the other `model` keys, because setting it removes `model.base_url` and `model.api_mode`. Uninstall never writes a `model.api_key` back. When `state.json` came from Polytropos 0.1.1, uninstall removes the `${FREELLMAPI_API_KEY}` pointer that FreeLLMAPI's `setup-hermes` wrote to `model.api_key` while that key still holds it. When the section from before that setup had an `api_key`, uninstall says so, and you set it again yourself. When a restore fails, uninstall prints the command and keeps the record. For a mapping, which can hold an API key, it prints where the old value is recorded and leaves the command out.
 - It undoes the integrations that `install` recorded for this profile. Hermes skills go with `hermes skills uninstall <name> --yes`, and rtk's Hermes plugin with `~/.local/bin/rtk init --agent hermes --uninstall`. The context7 MCP entry is restored with the other config changes. graphify writes its skill to `~/.hermes/skills/graphify/` whatever the profile, so uninstall deletes that folder only in the default profile and prints its path in the others. FreeLLMAPI's `setup-opencode` added its provider and a default model to OpenCode's config and stored FreeLLMAPI's key under `freellmapi` in `$XDG_DATA_HOME/opencode/auth.json`. Uninstall prints both paths and leaves those changes to you. When an undo command fails, uninstall prints the command and keeps the record.
-- It drops this profile from each shared part. When no other profile uses a part and Polytropos installed it, uninstall removes it. For FreeLLMAPI that is the service, `releases/` and the `current` link. Programs go with `uv tool uninstall`, `npm uninstall -g`, or by deleting their files in `~/.local` for rtk and the macOS Ollama. Ollama on Linux came from Ollama's install script, and uninstall asks you to remove it yourself.
+- It drops this profile from each shared part. When no other profile uses a part and Polytropos installed it, uninstall removes it. For FreeLLMAPI that is the service, `releases/` and the `current` link. Programs go with `uv tool uninstall`, `npm uninstall -g`, or by deleting their files in `~/.local` for rtk and the macOS Ollama. Ollama on Linux and Windows came from Ollama's install script, and uninstall asks you to remove it yourself. On Windows the desktop app is FreeLLMAPI, and uninstall leaves it.
 - With `--purge-data` it asks `Type yes to delete <path> with FreeLLMAPI's database, keys and backups: ` and deletes `~/.local/share/polytropos/freellmapi` after `yes`. While another profile still uses FreeLLMAPI, the folder stays. Without the option, uninstall prints where the data stays.
 - Last, it prints `hermes plugins remove <name>` for each pack plugin in the profile (`polytropos-router`, `ponytail`, `superpowers` and `polytropos`) and asks you to restart the gateway with `hermes gateway restart`.
 
@@ -333,13 +333,13 @@ It reads three variables from the gateway's environment, which Hermes loads from
 
 The guard decides whether a local model may run now. It reads three signals.
 
-| Signal | macOS | Linux | A local turn is refused when |
-|---|---|---|---|
-| Memory pressure | `sysctl -n kern.memorystatus_vm_pressure_level`. 1 or lower is normal, 2 and 3 are warning, 4 and higher critical. | `/proc/pressure/memory`. `full avg10` at 10.0 or above is critical. Otherwise `some avg10` at 10.0 or above is warning. | the pressure is warning or critical |
-| Swap in use | `sysctl -n vm.swapusage` | `SwapTotal` minus `SwapFree` in `/proc/meminfo` | swap use is above 4 GiB |
-| Free disk | at `~/.ollama/models`, or the home folder when that does not exist | the same | free disk is below 5 GiB |
+| Signal | macOS | Linux | Windows | A local turn is refused when |
+|---|---|---|---|---|
+| Memory pressure | `sysctl -n kern.memorystatus_vm_pressure_level`. 1 or lower is normal, 2 and 3 are warning, 4 and higher critical. | `/proc/pressure/memory`. `full avg10` at 10.0 or above is critical. Otherwise `some avg10` at 10.0 or above is warning. | The memory load from `GlobalMemoryStatusEx`, the percentage of RAM in use. 90 or above is warning, 95 or above critical. | the pressure is warning or critical |
+| Swap in use | `sysctl -n vm.swapusage` | `SwapTotal` minus `SwapFree` in `/proc/meminfo` | not read | swap use is above 4 GiB |
+| Free disk | at `~/.ollama/models`, or the home folder when that does not exist | the same | the same | free disk is below 5 GiB |
 
-The Linux PSI threshold of 10.0 is an untuned starting value. All limits are fixed in the code and have no setting. A signal that cannot be read counts as unknown and does not block. A refusal names its reason, in the form `memory pressure is <level>`, `swap use is <n> GB` or `free disk is <n> GB`.
+The Linux PSI threshold of 10.0 and the Windows memory loads of 90 and 95 percent are untuned starting values. All limits are fixed in the code and have no setting. A signal that cannot be read counts as unknown and does not block. A refusal names its reason, in the form `memory pressure is <level>`, `swap use is <n> GB` or `free disk is <n> GB`.
 
 ### Fit check
 
@@ -351,7 +351,7 @@ During a request to a local upstream the watchdog reads the signals every 2 seco
 
 ### Guard hook
 
-Sessions that use a local model without the router get the guard through a `pre_llm_call` hook. A session counts as local when its provider is not `polytropos-router` and its base URL is on this machine (`localhost` or a loopback address) with a port other than 3001, the FreeLLMAPI port. The hook takes the provider from Hermes's last API request of the session, or from `model` in the `config.yaml` of the turn's profile when the turn uses the default model. When the provider is unknown, the turn goes ahead. When the guard refuses, the turn ends with this message.
+Sessions that use a local model without the router get the guard through a `pre_llm_call` hook. A session counts as local when its provider is not `polytropos-router` and its base URL is on this machine (`localhost` or a loopback address) with a port other than 3001, the FreeLLMAPI port, or 31415 on Windows. The hook takes the provider from Hermes's last API request of the session, or from `model` in the `config.yaml` of the turn's profile when the turn uses the default model. When the provider is unknown, the turn goes ahead. When the guard refuses, the turn ends with this message.
 
 > Polytropos paused this turn because <reason>. A local model can freeze this machine at this level. Switch to a cloud model with /model, or wait and try again.
 
@@ -359,7 +359,7 @@ Set `plugins.entries.polytropos.settings.guard_hook` to `false` to turn the hook
 
 ## Sleep hold
 
-While a turn runs, the polytropos plugin keeps the machine from going to sleep. On macOS it runs `caffeinate -i -t 7200`, and on Linux `systemd-inhibit --what=idle:sleep --who=polytropos --why="Hermes turn" sleep 7200`. All sessions in one Hermes process share one hold. It ends when the last running turn ends, or after 7200 seconds in case a turn hangs, and the next turn starts a new one. Sleep settings such as `pmset` values stay yours, and the doctor only reports them. Set `plugins.entries.polytropos.settings.awake` to `false` to turn the hold off.
+While a turn runs, the polytropos plugin keeps the machine from going to sleep. On macOS it runs `caffeinate -i -t 7200`, and on Linux `systemd-inhibit --what=idle:sleep --who=polytropos --why="Hermes turn" sleep 7200`. On Windows it starts Hermes's own Python with a short script that calls `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` and sleeps 7200 seconds, without a console window. The display may still turn off, as with `caffeinate -i`. All sessions in one Hermes process share one hold. It ends when the last running turn ends, or after 7200 seconds in case a turn hangs, and the next turn starts a new one. Sleep settings such as `pmset` values stay yours, and the doctor only reports them. Set `plugins.entries.polytropos.settings.awake` to `false` to turn the hold off.
 
 ## FreeLLMAPI
 
@@ -369,6 +369,8 @@ Polytropos runs FreeLLMAPI in one of two modes, which it records in `state.json`
 
 - **Managed.** Polytropos built FreeLLMAPI from its pinned tag and runs it as a service. `install` sets this up on a machine without a FreeLLMAPI, and `adopt` turns an existing checkout into it. `update` changes FreeLLMAPI only in this mode.
 - **External.** A FreeLLMAPI already answered on port 3001 when you ran `install`, for example the desktop app, a Docker container or your own checkout. Polytropos uses it as it is and leaves its updates to you. `setup` asks for its URL.
+
+On Windows the mode is always external. Polytropos builds no FreeLLMAPI there and runs no service. You install FreeLLMAPI's desktop app from the [Microsoft Store](https://apps.microsoft.com/detail/9PBN6G8K2B7F), where it is signed and updates itself, or as the unsigned `.exe` installer from its [releases](https://github.com/tashfeenahmed/freellmapi/releases). The app serves the API on `127.0.0.1:31415` and keeps its data in `%APPDATA%\FreeLLMAPI`. A click on its tray icon opens the dashboard, where you add provider keys, and the Keys page shows the unified API key. When 31415 is taken, the app moves to the next free port and keeps it. Enter that URL in `setup` then. The doctor checks 31415 only.
 
 ### Files
 
@@ -423,18 +425,18 @@ The update rolls back when FreeLLMAPI does not answer `/v1/models` within 60 sec
 
 ## Programs and integrations
 
-The pins are in `versions.lock`. Polytropos checks a program with `<program> --version`, rtk as `~/.local/bin/rtk --version` and stack-canary with `canary run --help`. A default program is installed when the check shows another version or nothing. Ollama only has to be present.
+The pins are in `versions.lock`. Polytropos checks a program with `<program> --version`, rtk as `~/.local/bin/rtk --version` and stack-canary with `canary run --help`. Each command starts through the `PATH` lookup of Python's `shutil.which`, so on Windows npm's `.cmd` files run as well. A default program is installed when the check shows another version or nothing. Ollama only has to be present.
 
-npm, npx and uv get only part of the environment, so that the scripts of the packages they install do not see the provider keys in Hermes's environment. They get `PATH`, `HOME`, `USER`, `LOGNAME`, `TERM`, `LANG`, `LANGUAGE`, `TMPDIR`, the `LC_*` variables, the proxy variables, the CA certificate variables `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO`, the version manager variables `NVM_DIR`, `VOLTA_HOME`, `ASDF_*` and `MISE_*`, and the `npm_config_*`, `UV_*` and `XDG_*` variables. The same holds for `npm ci` and `npm run build` when Polytropos builds FreeLLMAPI, and for `npm uninstall -g` and `uv tool uninstall` during uninstall. FreeLLMAPI's `setup-opencode` also gets `FREELLMAPI_API_KEY`, see OpenCode below.
+npm, npx and uv get only part of the environment, so that the scripts of the packages they install do not see the provider keys in Hermes's environment. They get `PATH`, `HOME`, `USER`, `LOGNAME`, `TERM`, `LANG`, `LANGUAGE`, `TMPDIR`, the `LC_*` variables, the proxy variables, the CA certificate variables `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO`, the version manager variables `NVM_DIR`, `VOLTA_HOME`, `ASDF_*` and `MISE_*`, and the `npm_config_*`, `UV_*` and `XDG_*` variables. On Windows they also get `SYSTEMROOT`, `COMSPEC`, `PATHEXT`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP`, because node does not start without `SYSTEMROOT` and npm and uv find their folders through the others. The same holds for `npm ci` and `npm run build` when Polytropos builds FreeLLMAPI, and for `npm uninstall -g` and `uv tool uninstall` during uninstall. FreeLLMAPI's `setup-opencode` also gets `FREELLMAPI_API_KEY`, see OpenCode below.
 
-- **rtk.** Downloads the release archive for this platform (`darwin-arm64`, `darwin-x86_64`, `linux-x86_64` or `linux-aarch64`), checks its SHA-256, installs the binary as `~/.local/bin/rtk`, then runs `~/.local/bin/rtk init --agent hermes`, which adds rtk's Hermes plugin to the profile's `plugins/rtk/`. Another rtk on the `PATH` does not count as installed.
+- **rtk.** Downloads the release archive for this platform (`darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64` or `windows-x86_64`), checks its SHA-256, installs the binary as `~/.local/bin/rtk`, then runs `~/.local/bin/rtk init --agent hermes`, which adds rtk's Hermes plugin to the profile's `plugins/rtk/`. Another rtk on the `PATH` does not count as installed. On Windows the archive is a zip, and its `rtk.exe` replaces `~/.local/bin/rtk.exe` in place. That is the folder where uv puts its tools on Windows too. rtk has no build for Windows on arm64, so install stops there with the platform and machine error.
 - **graphify.** `uv tool install graphifyy==<version>`, then `graphify install --platform hermes`, which writes graphify's skill to `~/.hermes/skills/graphify/`.
 - **ast-grep.** `uv tool install ast-grep-cli==<version>`, then `hermes skills install official/software-development/ast-grep`.
 - **stack-canary.** `uv tool install git+https://github.com/Lil-Clanky/stack-canary@<commit>`. stack-canary has no version flag, so `install` records the commit it installed in `state.json`. It counts as installed at its pin when `canary run --help` works and that record is the pinned commit. Without a record, or with a record of another commit, `install` and `update` install the pinned commit.
 - **OpenCode**, optional. `npm install -g opencode-ai@<version>`, then `npx -y freellmapi@<cli_version> setup-opencode`, then `hermes skills install official/autonomous-ai-agents/opencode`. `setup-opencode` also gets the profile's `FREELLMAPI_API_KEY`, FreeLLMAPI's own key, and asks for it when the profile has none.
 - **qmd**, optional. `npm install -g @tobilu/qmd@<version>`, then `hermes skills install official/research/qmd`. qmd downloads and runs local GGUF models of its own, which is heavy on a machine with little memory.
 - **context7**, optional. `npm install -g @upstash/context7-mcp@<version>`, then `hermes mcp add context7 --command context7-mcp`. When the profile has a `context7` entry already, install leaves it as it is and skips that step. When `hermes mcp add` fails, install says that the MCP server was not added, prints the command to run yourself and goes on.
-- **Ollama**, optional and only when missing. On macOS install downloads `ollama-darwin.tgz` of the pinned version, checks its SHA-256, unpacks it into `~/.local/lib/polytropos/ollama/<version>/` and links `~/.local/bin/ollama` to it. On Linux Polytropos does not install Ollama, because Ollama's install script asks for `sudo`. Install prints `Polytropos does not install Ollama on Linux. Install it with: curl -fsSL https://ollama.com/install.sh | sh` and counts Ollama as not installed. On macOS Polytropos does not start Ollama, so run `ollama serve` yourself.
+- **Ollama**, optional and only when missing. On macOS install downloads `ollama-darwin.tgz` of the pinned version, checks its SHA-256, unpacks it into `~/.local/lib/polytropos/ollama/<version>/` and links `~/.local/bin/ollama` to it. On Linux Polytropos does not install Ollama, because Ollama's install script asks for `sudo`. Install prints `Polytropos does not install Ollama on Linux. Install it with: curl -fsSL https://ollama.com/install.sh | sh` and counts Ollama as not installed. On Windows it prints `Polytropos does not install Ollama on Windows. Install it in PowerShell with: irm https://ollama.com/install.ps1 | iex`, the command from Ollama's download page, because that script has no checksum to pin either. On macOS Polytropos does not start Ollama, so run `ollama serve` yourself.
 
 ## Canary data
 
@@ -493,8 +495,10 @@ The file holds no B6 cells and no results of `--openai-endpoint` runs. Polytropo
 | `~/.cache/polytropos/canary-matrix.json.failed` | Stamp of a failed matrix download, see [The published matrix](#the-published-matrix) |
 | `~/Library/LaunchAgents/io.github.lil-clanky.polytropos.freellmapi.plist` | FreeLLMAPI service on macOS |
 | `~/.config/systemd/user/polytropos-freellmapi.service` | FreeLLMAPI service on Linux |
-| `~/.local/bin/rtk` | rtk |
+| `~/.local/bin/rtk` | rtk, `rtk.exe` on Windows |
 | `~/.local/bin/ollama`, `~/.local/lib/polytropos/ollama/<version>/` | Ollama on macOS |
+
+On Windows the Hermes paths are under `%LOCALAPPDATA%\hermes` instead of `~/.hermes`, and the `polytropos` folders under `~/.local/share`, `~/.local/state` and `~/.cache` are one folder, `%LOCALAPPDATA%\polytropos`. Windows keeps no POSIX modes, so the files marked mode 0600 are as private as their folder in the user's profile.
 
 ### state.json
 

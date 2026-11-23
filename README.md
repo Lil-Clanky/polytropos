@@ -2,12 +2,12 @@
 
 ![Odysseus turns a switch between a local chip and the cloud](docs/images/banner.webp)
 
-Polytropos is a plugin pack for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It sets up an existing Hermes install to use free cloud models through [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) and small local models through [Ollama](https://ollama.com), on macOS and Linux.
+Polytropos is a plugin pack for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It sets up an existing Hermes install to use free cloud models through [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) and small local models through [Ollama](https://ollama.com), on macOS, Linux and Windows.
 
 The pack has two plugins of its own.
 
 - `polytropos-router` is a model provider. A session runs on its model `auto`, and the router chooses a real model for each turn. A short classifier call puts the turn on the `simple` or the `complex` route, and each route is a list of models that the router tries in order. A local model only gets the turn when the machine has memory to spare and the request fits the `context_window` set for it.
-- `polytropos` adds the `hermes polytropos` command. It installs the other parts at pinned versions, runs FreeLLMAPI as a background service and checks that everything works together. It also pauses turns on a local model when memory runs low, and keeps the machine awake while a turn runs.
+- `polytropos` adds the `hermes polytropos` command. It installs the other parts at pinned versions, runs FreeLLMAPI as a background service on macOS and Linux, and checks that everything works together. It also pauses turns on a local model when memory runs low, and keeps the machine awake while a turn runs.
 
 Every command, setting and path is listed in [docs/reference.md](docs/reference.md).
 
@@ -31,18 +31,18 @@ Every command, setting and path is listed in [docs/reference.md](docs/reference.
 | OpenCode | Coding agent for the terminal, set up to use FreeLLMAPI, with the opencode skill |
 | qmd | Local search over notes and documents, with the qmd skill. It runs local models of its own, which takes memory. |
 | context7 | MCP server with library documentation |
-| Ollama | Local model runtime, installed on macOS only when it is missing. On Linux install prints Ollama's own install command for you to run. |
+| Ollama | Local model runtime, installed on macOS only when it is missing. On Linux and Windows install prints Ollama's own install command for you to run. |
 
 The programs are pinned in [versions.lock](versions.lock) and the plugins in [hermes-pack.yaml](hermes-pack.yaml), each at a fixed version or commit.
 
 ## Requirements
 
 - Hermes Agent v0.23.2, installed and working. The doctor warns when it finds another version.
-- macOS, or Linux with systemd. The FreeLLMAPI service runs as a LaunchAgent on macOS and as a systemd user unit on Linux.
-- A Mac on arm64 or x86_64, or a Linux machine on x86_64 or aarch64. rtk has release downloads for these machines only. On another machine `hermes polytropos install` stops with an error that names the platform and the machine, and `update` does the same when it reaches the programs.
+- macOS, Linux with systemd, or Windows. The FreeLLMAPI service runs as a LaunchAgent on macOS and as a systemd user unit on Linux. On Windows FreeLLMAPI is its own desktop app, which you install, see [On Windows](#on-windows).
+- A Mac on arm64 or x86_64, a Linux machine on x86_64 or aarch64, or a Windows PC on x86_64. rtk has release downloads for these machines only. On another machine `hermes polytropos install` stops with an error that names the platform and the machine, and `update` does the same when it reaches the programs.
 - git and [uv](https://docs.astral.sh/uv/).
-- Node.js `>=20.18.0 <25.0.0` with npm, to build and run FreeLLMAPI. Polytropos does not install Node, and the doctor checks its version.
-- `~/.local/bin` on your `PATH`. Polytropos puts rtk there, and on macOS also Ollama.
+- Node.js `>=20.18.0 <25.0.0` with npm, to build and run FreeLLMAPI. Polytropos does not install Node, and the doctor checks its version. On Windows only the optional npm programs need Node.
+- `~/.local/bin` on your `PATH`, `%USERPROFILE%\.local\bin` on Windows. Polytropos puts rtk there, and on macOS also Ollama. uv puts its tools there too, and `uv tool update-shell` adds the folder to the `PATH`.
 
 ## Install
 
@@ -94,6 +94,10 @@ Here is what each step does.
 6. **Connect Hermes.** `hermes config set FREELLMAPI_API_KEY <unified key>` stores the key in the profile's `.env`. Then `hermes polytropos setup` asks whether to make the router the default model, and writes the router settings with `hermes config set`. Setup stops when the profile has no `FREELLMAPI_API_KEY`. It changes the `model` section only after a yes, one key at a time, and records the old values so that uninstall can put them back.
 7. **Run the doctor again.** When no check fails, the profile has `FREELLMAPI_API_KEY` and the router is not the default model yet, the doctor asks whether to make it the default. Without the key it prints the `hermes config set FREELLMAPI_API_KEY` command instead.
 
+### On Windows
+
+On Windows Polytropos does not build or run FreeLLMAPI. Install FreeLLMAPI's desktop app from the [Microsoft Store](https://apps.microsoft.com/detail/9PBN6G8K2B7F), where it is signed and updates itself, or as the unsigned `.exe` installer from its [releases](https://github.com/tashfeenahmed/freellmapi/releases), and open it. `hermes polytropos install` records it in external mode and says the same. The app serves the API on `127.0.0.1:31415`, and a click on its tray icon opens the dashboard. There you add your provider keys, and the Keys page shows the unified API key for step 6. `setup` asks for FreeLLMAPI's URL and offers `http://127.0.0.1:31415`. When that port was taken, the app uses the next free one, and you enter that URL instead. Install does not install Ollama on Windows either. It prints Ollama's PowerShell install command.
+
 ### From the plugin catalog
 
 When Polytropos is listed in the Hermes plugin catalog, you can install its two plugins by name instead of with the pack.
@@ -123,8 +127,8 @@ A running gateway keeps the old plugin code until it restarts. Hermes prints `he
 
 - The Hermes version.
 - The pack plugins, against the commits pinned in `versions.lock` and the commit of the installed polytropos plugin.
-- Whether FreeLLMAPI answers on 127.0.0.1:3001, whether it accepts the profile's `FREELLMAPI_API_KEY`, and in which mode Polytropos runs it.
-- Whether the Node version fits FreeLLMAPI, unless FreeLLMAPI runs in external mode.
+- Whether FreeLLMAPI answers on 127.0.0.1:3001, or 127.0.0.1:31415 on Windows, whether it accepts the profile's `FREELLMAPI_API_KEY`, and in which mode Polytropos runs it.
+- Whether the Node version fits FreeLLMAPI, unless FreeLLMAPI runs in external mode or on Windows.
 - The router settings, cloud models with a window below Hermes's minimum of 64,000 tokens, and upstreams that do not answer.
 - A leftover `router:` section from Hermes's closed router pull request, which Polytropos ignores.
 - The pinned programs and their versions.
@@ -165,14 +169,14 @@ Some things stay.
 - A FreeLLMAPI that Polytropos did not install. Polytropos leaves it alone.
 - The `FREELLMAPI_API_KEY` line that `hermes config set` wrote to the profile's `.env`.
 - The changes that FreeLLMAPI's `setup-opencode` made for OpenCode. It added the `freellmapi` provider and a default model to `~/.config/opencode/opencode.json`, and stored FreeLLMAPI's key under `freellmapi` in `~/.local/share/opencode/auth.json`. Uninstall prints both paths, and you change them by hand.
-- Polytropos's own files in `~/.local/state/polytropos`, `~/.cache/polytropos` and `~/.local/share/polytropos/canary`.
+- Polytropos's own files in `~/.local/state/polytropos`, `~/.cache/polytropos` and `~/.local/share/polytropos/canary`. On Windows these are all in `%LOCALAPPDATA%\polytropos`.
 
 ## What Polytropos runs and changes
 
 This section lists what Polytropos does outside its own folders, so that you can judge it before you install.
 
-- **Background processes.** In managed mode FreeLLMAPI runs as a LaunchAgent on macOS or a systemd user unit on Linux, and listens on 127.0.0.1:3001. While a turn runs, the polytropos plugin keeps the machine awake with `caffeinate -i` on macOS or `systemd-inhibit` on Linux. That process stops when the turn ends, and after two hours at the latest.
-- **Commands.** The `hermes polytropos` commands run git, npm, npx, uv, `hermes config set`, `hermes mcp add`, `hermes plugins install`, and `launchctl` or `systemctl --user`, plus the install commands of the programs in `versions.lock`. The doctor runs the version commands of those programs, and `pmset -g` on macOS. During a turn the memory guard runs `sysctl` on macOS and reads `/proc` on Linux. Polytropos never runs `sudo`. On Linux it does not install Ollama, because Ollama's install script asks for `sudo`, and prints that script's command instead.
+- **Background processes.** In managed mode FreeLLMAPI runs as a LaunchAgent on macOS or a systemd user unit on Linux, and listens on 127.0.0.1:3001. On Windows Polytropos runs no service. While a turn runs, the polytropos plugin keeps the machine awake with `caffeinate -i` on macOS, `systemd-inhibit` on Linux, or on Windows a child Python that calls `SetThreadExecutionState`. That process stops when the turn ends, and after two hours at the latest.
+- **Commands.** The `hermes polytropos` commands run git, npm, npx, uv, `hermes config set`, `hermes mcp add`, `hermes plugins install`, and `launchctl` or `systemctl --user`, plus the install commands of the programs in `versions.lock`. The doctor runs the version commands of those programs, and `pmset -g` on macOS. During a turn the memory guard runs `sysctl` on macOS, reads `/proc` on Linux and calls `GlobalMemoryStatusEx` on Windows. Polytropos never runs `sudo`. On Linux and Windows it does not install Ollama and prints Ollama's own install command instead, because the Linux script asks for `sudo` and neither script has a checksum to pin.
 - **Files outside its own folders.** Setup and install change the profile's `config.yaml` through `hermes config set` and record the old values for uninstall. Install adds Hermes skills, rtk's Hermes plugin and MCP entries to the profile, a LaunchAgent in `~/Library/LaunchAgents` or a unit in `~/.config/systemd/user`, programs in `~/.local/bin`, and after you say yes, ponytail through `hermes plugins install`. The doctor reads Hermes's plugin install records, the plugin folders of the other profiles, and the names of files in `~/Downloads`, `~/Desktop` and the home folder.
 - **Your own FreeLLMAPI.** `hermes polytropos adopt --from <checkout>` copies the database, `.env` and `.encryption-key` of the FreeLLMAPI checkout you name into Polytropos's data folder, so that FreeLLMAPI can still read its provider keys. Polytropos reads the encryption key only to write it into the `.env` of the FreeLLMAPI it runs.
 - **Credentials.** The plugins read `FREELLMAPI_API_KEY`, and the key variable of any other upstream you add to the router, through Hermes's secret scope for the active profile. Provider keys stay in FreeLLMAPI's encrypted database. npm, npx and uv run with a short list of environment variables, so the scripts of the packages they install do not see the keys in Hermes's environment.
@@ -210,11 +214,11 @@ python scripts/sync_shared.py --check
 python -m pytest -q -m "not e2e"
 ```
 
-CI runs these on Ubuntu and macOS with Python 3.11 and 3.13. Code that both plugins use lives in `shared/polytropos_shared/`. `scripts/sync_shared.py` copies it into each plugin's `_shared/` folder and copies `versions.lock` into the polytropos plugin, and `--check` exits with status 1 when a copy is out of date. The copies are committed, because Hermes installs a plugin folder straight from git. A test run refreshes them as well.
+CI runs these on Ubuntu, macOS and Windows with Python 3.11 and 3.13. Code that both plugins use lives in `shared/polytropos_shared/`. `scripts/sync_shared.py` copies it into each plugin's `_shared/` folder and copies `versions.lock` into the polytropos plugin, and `--check` exits with status 1 when a copy is out of date. The copies are committed, because Hermes installs a plugin folder straight from git. A test run refreshes them as well.
 
 ### End-to-end tests
 
-The end-to-end tests in `tests/e2e` run the Hermes Agent from `~/.hermes/hermes-agent` in an isolated home under `.sandbox/e2e`, against fake OpenAI-compatible servers on loopback ports. They run on your own machine only, and CI leaves them out. Build their root once.
+The end-to-end tests in `tests/e2e` run the Hermes Agent from `~/.hermes/hermes-agent` in an isolated home under `.sandbox/e2e`, against fake OpenAI-compatible servers on loopback ports. They run on your own macOS or Linux machine only, and CI leaves them out. Build their root once.
 
 ```sh
 python scripts/hermes_sandbox.py build-root .sandbox/e2e
