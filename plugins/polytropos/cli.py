@@ -315,27 +315,31 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
     return True
 
 
-def _ponytail(lock: dict, fx: Effects, *, force: bool = False) -> bool:
-    try:
-        programs.ponytail_fallback(lock, fx.run, force=force)
-    except (subprocess.CalledProcessError, OSError) as err:
-        print(f"ponytail was not installed: {err}")
-        return False
-    print(f"ponytail is installed at {lock['plugins']['ponytail']['commit'][:7]}.")
-    return True
-
-
-def _move_ponytail(home: Path, lock: dict, fx: Effects) -> bool:
-    """Reinstall ponytail through Hermes when its install record has another commit than the lock, or when there is no
-    record, as for the clone that Polytropos 0.1.1 made."""
+def _ponytail(home: Path, lock: dict, fx: Effects, *, asked: bool) -> None:
+    """Install a missing ponytail through Hermes, after a yes unless asked already. A ponytail that is there stays as
+    it is, whoever installed it. Never a failure of the command: Hermes does not accept ponytail's plugin.json yet."""
     pin = lock["plugins"]["ponytail"]
+    if (home / "plugins" / "ponytail").is_dir():
+        try:
+            record = doctor.install_records(home).get(doctor._repo_subdir(pin["repo"]))
+        except (OSError, ValueError):  # the doctor reports unreadable records
+            record = None
+        revision = str(record[1].get("revision") or "").lower() if record else ""
+        if revision and revision != pin["commit"]:
+            print(f"ponytail is at {revision[:7]}, and Polytropos pins {pin['commit'][:7]}. To move it, run: "
+                  f"hermes plugins install {pin['repo']} --ref {pin['commit']} --force")
+        return
+    if not asked and not _yes(fx, PONYTAIL_QUESTION):
+        return
     try:
-        record = doctor.install_records(home).get(doctor._repo_subdir(pin["repo"]))
-    except (OSError, ValueError):  # unreadable records: the doctor reports them, and ponytail stays as it is
-        return True
-    if record and str(record[1].get("revision") or "").lower() == pin["commit"]:
-        return True
-    return _ponytail(lock, fx, force=True)
+        programs.ponytail_fallback(lock, fx.run)
+    except subprocess.CalledProcessError:
+        print("ponytail was not installed, because Hermes does not accept ponytail's plugin.json yet.")
+        return
+    except OSError as err:
+        print(f"ponytail was not installed: {err}")
+        return
+    print(f"ponytail is installed at {pin['commit'][:7]}.")
 
 
 def _install(args, fx: Effects) -> int:
@@ -375,10 +379,7 @@ def _install(args, fx: Effects) -> int:
                 _own_freellmapi(state, profile, pin.tag)
         save_state(state)
     if not only or "ponytail" in only:
-        if (home / "plugins" / "ponytail").is_dir():
-            failed += not _move_ponytail(home, lock, fx)
-        elif "ponytail" in only or _yes(fx, PONYTAIL_QUESTION):
-            failed += not _ponytail(lock, fx)
+        _ponytail(home, lock, fx, asked="ponytail" in only)
     for p in progs:
         chosen = p.name in only if only else not p.optional or args.all_optional or _yes(fx, f"Install {p.name}?")
         if chosen and not _install_program(p, state, profile, fx):
@@ -489,10 +490,7 @@ def _update(args, fx: Effects) -> int:
         return 0
     failed = 0
     if everything:
-        if (home / "plugins" / "ponytail").is_dir():
-            failed += not _move_ponytail(home, lock, fx)
-        elif _yes(fx, PONYTAIL_QUESTION):
-            failed += not _ponytail(lock, fx)
+        _ponytail(home, lock, fx, asked=False)
     if args.component in ("programs", "all"):
         failed += _update_programs(lock, state, profile, fx)
     if args.component in ("freellmapi", "all"):

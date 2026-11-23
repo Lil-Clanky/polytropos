@@ -1,8 +1,8 @@
 # Hermes plugin pack for Polytropos. Install with: hermes plugins pack install hermes-pack.yaml
 # The refs of the two own entries are written by scripts/release.py at release time.
 # The ponytail and superpowers refs follow versions.lock.
-# On Hermes v0.23.2 the ponytail entry fails to install and the pack install reports it as failed.
-# `hermes polytropos install` installs ponytail with `hermes plugins install`, which fails the same way there.
+# Hermes refuses ponytail's plugin.json, on v0.23.2 and later, so the pack install reports the ponytail entry as
+# failed. `hermes polytropos install` tries `hermes plugins install`, which Hermes refuses the same way.
 name: polytropos
 description: Model routing, FreeLLMAPI and token savings for Hermes Agent
 author: Lil-Clanky

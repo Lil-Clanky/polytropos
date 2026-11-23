@@ -196,11 +196,9 @@ def test_context7_mcp_step_falls_back_to_manual(capsys):
 
 def test_ponytail_goes_through_hermes_plugins_install():
     calls = []
-    for force in (False, True):
-        P.ponytail_fallback(LOCK, lambda cmd, **k: calls.append(cmd) or proc(), force=force)
-    install = ["hermes", "plugins", "install", LOCK["plugins"]["ponytail"]["repo"],
-               "--ref", LOCK["plugins"]["ponytail"]["commit"]]
-    assert calls == [install + ["--enable"], install + ["--force"]]
+    P.ponytail_fallback(LOCK, lambda cmd, **k: calls.append(cmd) or proc())
+    assert calls == [["hermes", "plugins", "install", LOCK["plugins"]["ponytail"]["repo"],
+                      "--ref", LOCK["plugins"]["ponytail"]["commit"], "--enable"]]
 
 
 def tar_ollama(extra=()):

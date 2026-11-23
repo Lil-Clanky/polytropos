@@ -111,9 +111,16 @@ def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
         key = _repo_subdir(str(entry["repo"]), entry.get("subdir") or "")
         pinned = str(entry["ref"]).lower()
         label = key[0] + (f"#{key[1]}" if key[1] else "")
+        if entry.get("name") == "ponytail" and key not in installed:  # Hermes does not accept its plugin.json yet
+            if (ctx.hermes_home / "plugins" / "ponytail").is_dir():
+                results.append(CheckResult("info", "plugin ponytail was installed without Hermes's installer",
+                                           "Hermes keeps no install record of it, so its commit is not checked"))
+            else:
+                results.append(CheckResult("warn", f"plugin {label} is not installed",
+                                           fix="hermes polytropos install --only ponytail"))
+            continue
         if key not in installed or not pinned:
             fix = ("install Polytropos again, see Install in its README" if key[0] == "Lil-Clanky/polytropos"
-                   else "hermes polytropos install --only ponytail" if entry.get("name") == "ponytail"
                    else f"hermes plugins install {entry['repo']} --ref {pinned}")
             results.append(CheckResult("fail", f"plugin {label} is not installed", fix=fix))
             continue

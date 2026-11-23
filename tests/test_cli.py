@@ -416,9 +416,9 @@ def test_update_asks_before_it_installs_a_missing_ponytail(tmp_home):
     assert not [c for c in run.commands() if c[:3] == ["hermes", "plugins", "install"]]
 
 
-@pytest.mark.parametrize("revision, moved",
-                         [(None, True), (SHA_OLD, True), (LOCK["plugins"]["ponytail"]["commit"], False)])
-def test_update_and_install_reinstall_a_ponytail_at_another_commit(tmp_home, revision, moved):
+@pytest.mark.parametrize("revision, hint",
+                         [(None, False), (SHA_OLD, True), (LOCK["plugins"]["ponytail"]["commit"], False)])
+def test_update_and_install_leave_a_ponytail_that_is_there(tmp_home, capsys, revision, hint):
     home = tmp_home / ".hermes"
     pin = LOCK["plugins"]["ponytail"]
     (home / "plugins" / "ponytail" / ".git").mkdir(parents=True)  # without a record: the clone of Polytropos 0.1.1
@@ -428,15 +428,26 @@ def test_update_and_install_reinstall_a_ponytail_at_another_commit(tmp_home, rev
     if revision:
         meta["ponytail"] = {"source": pin["repo"], "revision": revision, "pinned": True}
     (home / "plugins" / ".install-metadata.json").write_text(json.dumps(meta))
-    reinstall = [["hermes", "plugins", "install", pin["repo"], "--ref", pin["commit"], "--force"]] if moved else []
+    move = f"hermes plugins install {pin['repo']} --ref {pin['commit']} --force"
     versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
                 "ast-grep": LOCK["ast-grep"]["version"], "canary": ""}
     run = FakeRun(versions=versions)
     assert cli.handle(parse("update"), cli.Effects(run=run, ask=lambda q: "y")) == 0
-    assert [c for c in run.commands() if c[:2] == ["hermes", "plugins"]] == reinstall
+    assert not [c for c in run.commands() if c[:2] == ["hermes", "plugins"]]
+    assert (move in capsys.readouterr().out) == hint
     run = FakeRun()
     assert cli.handle(parse("install", "--only", "ponytail"), cli.Effects(run=run, ask=no_questions)) == 0
-    assert run.commands() == reinstall
+    assert run.commands() == []
+    assert (move in capsys.readouterr().out) == hint
+
+
+def test_a_refused_ponytail_install_does_not_fail_install(tmp_home, capsys):
+    run = FakeRun(fail=[("hermes", "plugins", "install")])
+    assert cli.handle(parse("install", "--only", "ponytail"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands()[0][:3] == ["hermes", "plugins", "install"] and run.commands()[0][-1] == "--enable"
+    out = capsys.readouterr().out
+    assert "ponytail was not installed, because Hermes does not accept ponytail's plugin.json yet." in out
+    assert "Install finished." in out
 
 
 def installed_lock(monkeypatch, tmp_home, text):

@@ -92,14 +92,16 @@ def test_plugins_match_records_by_source(ctx):
     assert [r.status for r in got] == ["fail"] * 3 and "not installed" in got[1].label
 
 
-def test_a_ponytail_clone_without_an_install_record_is_not_installed(ctx):
+def test_ponytail_without_an_install_record_is_no_failure(ctx):
     pin = LOCK["plugins"]["ponytail"]
-    (ctx.hermes_home / "plugins" / "ponytail" / ".git").mkdir(parents=True)  # as Polytropos 0.1.1 cloned it
     ctx.pack = {"plugins": [{"repo": pin["repo"], "ref": pin["commit"], "name": "ponytail"}]}
     ctx.run = lambda argv, **kw: pytest.fail(f"unexpected command: {argv}")
     r = only(d.check_plugins(ctx))
-    assert r.status == "fail" and r.label == "plugin DietrichGebert/ponytail is not installed"
+    assert r.status == "warn" and r.label == "plugin DietrichGebert/ponytail is not installed"
     assert r.fix == "hermes polytropos install --only ponytail"
+    (ctx.hermes_home / "plugins" / "ponytail" / ".git").mkdir(parents=True)  # as Polytropos 0.1.1 cloned it
+    r = only(d.check_plugins(ctx))
+    assert r.status == "info" and r.label == "plugin ponytail was installed without Hermes's installer"
 
 
 def test_freellmapi_not_running(ctx):
