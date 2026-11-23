@@ -391,11 +391,6 @@ class FreeLLM:
             return UpdateResult(False, new, old, True, str(err))
         return UpdateResult(True, new, old, True, f"restored {old}" + ("" if back else ", which does not answer yet"))
 
-    def cli_command(self, lock: dict) -> list[str]:
-        if self._is_managed_mode():
-            return [self.node, str(self.root / "current/cli/dist/index.js")]
-        return ["npx", f"freellmapi@{lock['freellmapi']['cli_version']}"]
-
 
 def _is_json(body: bytes) -> bool:
     try:

@@ -11,10 +11,11 @@ hermes plugins install polytropos
 hermes plugins install polytropos-router
 hermes polytropos doctor
 hermes polytropos install
+hermes config set FREELLMAPI_API_KEY <unified key>
 hermes polytropos setup
 ```
 
-The doctor reports what is still missing. `install` builds FreeLLMAPI at its pinned tag, runs it on `127.0.0.1:3001` and installs the programs. It asks before it installs ponytail and before each optional program. Before `setup`, open FreeLLMAPI's dashboard at http://127.0.0.1:3001, add your provider keys and copy its unified API key, which `setup` asks for. Run the doctor again afterwards. It can ask whether to make the router the default model.
+The doctor reports what is still missing. `install` builds FreeLLMAPI at its pinned tag, runs it on `127.0.0.1:3001` and installs the programs. It asks before it installs ponytail and before each optional program. Before `setup`, open FreeLLMAPI's dashboard at http://127.0.0.1:3001, add your provider keys and copy its unified API key. `hermes config set` stores it in the profile's `.env`, and `setup` stops without it. Run the doctor again afterwards. It can ask whether to make the router the default model.
 
 ## Requirements
 

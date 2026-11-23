@@ -134,7 +134,7 @@ def test_freellmapi_health_uses_this_profiles_key(ctx, monkeypatch):
     monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-another-key")
     refused = only(d.check_freellmapi(ctx))
     assert refused.status == "warn" and refused.label == "FreeLLMAPI does not accept this profile's FREELLMAPI_API_KEY"
-    assert no_key.fix == refused.fix == "hermes polytropos setup"
+    assert no_key.fix == refused.fix == "hermes config set FREELLMAPI_API_KEY <key>"
     monkeypatch.setenv("FREELLMAPI_API_KEY", key)
     state = State()
     set_mode(state, "freellmapi", "external")

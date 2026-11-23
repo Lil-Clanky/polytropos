@@ -71,9 +71,10 @@ Install the rest. Install asks before it installs ponytail and before each optio
 hermes polytropos install
 ```
 
-Add your provider keys in FreeLLMAPI's dashboard and copy its unified API key, as step 5 below explains. Setup asks for that key.
+Add your provider keys in FreeLLMAPI's dashboard and copy its unified API key, as step 5 below explains. Store that key in the profile, then run setup.
 
 ```sh
+hermes config set FREELLMAPI_API_KEY <unified key>
 hermes polytropos setup
 ```
 
@@ -89,8 +90,8 @@ Here is what each step does.
 2. **Install the pack.** Hermes shows its review screen, a list of the plugins with their sources and pinned commits, and asks you to confirm with `y`. That question is why the pack install needs a terminal. Then Hermes scans each plugin before it installs it. On Hermes v0.23.2 the first run stops polytropos and prints the findings of its scan, prints a failure line for ponytail, and exits with status 1. The scan gives polytropos a caution verdict, with findings about launch agents, systemd services, git clones and `sudo`. They come from what the plugin does. It writes a LaunchAgent or a systemd unit to run FreeLLMAPI, it clones the git repositories of FreeLLMAPI and ponytail, and its doctor names `sudo pmset -a sleep 0` as a fix for you to run. Read the findings for polytropos, and for any other plugin that the scan stopped, then run the same command again with `--force`. With `--force` Hermes installs a plugin with a caution verdict without printing its findings, and a dangerous verdict still stops the plugin. The second run installs polytropos, polytropos-router and superpowers and prints the ponytail failure again. Step 4 installs ponytail another way. When an entry fails with `fatal: shallow file has changed since we read it`, run the command with `--force` once more. What this step says about the scan was read from Hermes's source and its scanner and has not been tried in a real install.
 3. **Run the doctor.** On a new install it reports FreeLLMAPI, ponytail and the programs as missing.
 4. **Install the rest.** `hermes polytropos install` builds FreeLLMAPI at its pinned tag and runs it as a service on `127.0.0.1:3001`. It asks before it installs ponytail from its pinned commit, installs the default programs, and asks about each optional one. When a FreeLLMAPI already answers on port 3001, Polytropos uses that one as it is and leaves its updates to you. To let Polytropos run it instead, stop it and run `hermes polytropos adopt --from <its checkout>`. When another program holds port 3001, install stops and asks you to free the port first.
-5. **Add provider keys.** Open FreeLLMAPI's dashboard at http://127.0.0.1:3001, add your provider keys, and copy FreeLLMAPI's unified API key, which the next step asks for.
-6. **Connect Hermes.** `hermes polytropos setup` runs FreeLLMAPI's own `setup-hermes`. When it asks for an API key, paste the unified key. `setup-hermes` stores the key as `FREELLMAPI_API_KEY` in the profile's `.env` and rewrites the profile's `model` section so that FreeLLMAPI's model is the default. Polytropos keeps a copy of the `model` section from before, so that uninstall can put it back. Then it asks whether to make the router the default model instead, and writes the router settings.
+5. **Add provider keys.** Open FreeLLMAPI's dashboard at http://127.0.0.1:3001, add your provider keys, and copy FreeLLMAPI's unified API key, which the next step stores.
+6. **Connect Hermes.** `hermes config set FREELLMAPI_API_KEY <unified key>` stores the key in the profile's `.env`. Then `hermes polytropos setup` asks whether to make the router the default model, and writes the router settings with `hermes config set`. Setup stops when the profile has no `FREELLMAPI_API_KEY`. It changes the `model` section only after a yes, one key at a time, and records the old values so that uninstall can put them back.
 7. **Run the doctor again.** When no check fails, the profile has `FREELLMAPI_API_KEY` and the router is not the default model yet, the doctor asks whether to make it the default. Without the key it prints the setup command instead.
 
 ### From the plugin catalog
@@ -106,7 +107,7 @@ Hermes installs each one at the commit the catalog pins and does not stop at a c
 
 ### The FreeLLMAPI key
 
-Hermes needs `FREELLMAPI_API_KEY` for every turn on the router, also when all routes are local. Without it Hermes stops the turn with an error that starts with `No usable credentials found for provider 'polytropos-router'. Set FREELLMAPI_API_KEY.` When fallback providers are set with `hermes fallback`, the gateway and the TUI run the turn on the first fallback that has credentials instead, without the router. `hermes polytropos setup` leaves the key in the profile's `.env`.
+Hermes needs `FREELLMAPI_API_KEY` for every turn on the router, also when all routes are local. Without it Hermes stops the turn with an error that starts with `No usable credentials found for provider 'polytropos-router'. Set FREELLMAPI_API_KEY.` When fallback providers are set with `hermes fallback`, the gateway and the TUI run the turn on the first fallback that has credentials instead, without the router. `hermes config set FREELLMAPI_API_KEY <key>` stores the key in the profile's `.env`.
 
 ### Restarting the gateway
 
@@ -154,7 +155,7 @@ Polytropos does not update anything until you run `update`.
 hermes polytropos uninstall
 ```
 
-Uninstall sets the settings that Polytropos changed in this profile back to their old values. That includes the `model` section that FreeLLMAPI's `setup-hermes` rewrote, so the model you used before the setup comes back. It also undoes the integrations that `install` recorded for this profile, such as the Hermes skills and the context7 MCP entry. It removes the FreeLLMAPI service and the programs that Polytropos installed, once no other profile uses them. At the end it prints a `hermes plugins remove` command for each pack plugin. Run those yourself, then `hermes gateway restart`. When a restore, an undo or a removal fails, uninstall exits with status 1 and keeps its record, so the next uninstall tries again.
+Uninstall sets the settings that Polytropos changed in this profile back to their old values. When you made the router the default model, the model you used before comes back. It also undoes the integrations that `install` recorded for this profile, such as the Hermes skills and the context7 MCP entry. It removes the FreeLLMAPI service and the programs that Polytropos installed, once no other profile uses them. At the end it prints a `hermes plugins remove` command for each pack plugin. Run those yourself, then `hermes gateway restart`. When a restore, an undo or a removal fails, uninstall exits with status 1 and keeps its record, so the next uninstall tries again.
 
 Some things stay.
 
@@ -162,7 +163,7 @@ Some things stay.
 - Programs that were on the machine before Polytropos, and the skills and MCP entries that the profile had before the install.
 - Shared parts that another profile still uses.
 - A FreeLLMAPI that Polytropos did not install. Polytropos leaves it alone.
-- The `FREELLMAPI_API_KEY` line that FreeLLMAPI's `setup-hermes` wrote to the profile's `.env`.
+- The `FREELLMAPI_API_KEY` line that `hermes config set` wrote to the profile's `.env`.
 - The changes that FreeLLMAPI's `setup-opencode` made for OpenCode. It added the `freellmapi` provider and a default model to `~/.config/opencode/opencode.json`, and stored FreeLLMAPI's key under `freellmapi` in `~/.local/share/opencode/auth.json`. Uninstall prints both paths, and you change them by hand.
 - Polytropos's own files in `~/.local/state/polytropos`, `~/.cache/polytropos` and `~/.local/share/polytropos/canary`.
 
@@ -181,13 +182,13 @@ This section lists what Polytropos does outside its own folders, so that you can
 ## What stays on this machine
 
 - In managed mode FreeLLMAPI listens on 127.0.0.1 only.
-- Provider keys stay in FreeLLMAPI's encrypted database, and the unified key in the profile's `.env`. Polytropos does not print or log key values. When your `model` section held a key before the setup, `~/.local/state/polytropos/state.json` keeps a copy of that section, with mode 0600, until uninstall puts it back. Uninstall puts it back with `hermes config set --force model '<json>'`, so a key written literally in that section shows in the process list while the command runs. Hermes has no way to take the value on stdin.
+- Provider keys stay in FreeLLMAPI's encrypted database, and the unified key in the profile's `.env`. Polytropos does not print or log key values, and it records no `model.api_key`. The setup of Polytropos 0.1.1 kept a copy of the whole `model` section in `~/.local/state/polytropos/state.json`, with mode 0600, API key included. Uninstall restores only the non-secret keys of that copy and drops it, so the key is not written back.
 - The router writes no message text to disk. Its traces are off by default. When you turn them on, they record the route and the model of each request without message text, in a file that only your user can read.
 - The classifier sends the last user message of each turn to the classifier model, which is FreeLLMAPI's `auto` model by default. It sends at most 2,000 characters, the start and the end of a longer message. Hermes's own auxiliary calls, such as titles, context compression and smart approvals, also pass through the router, and each of them costs one classifier call. The user message of a compression call holds the conversation being summarized. With a cloud classifier that text reaches a cloud provider, also when the turn itself then runs on a local model.
 - `hermes polytropos canary run` only tests endpoints on this machine, and its results stay in `~/.local/share/polytropos/canary`.
 - The doctor's key-file check reads file names and permissions and does not open the files.
 - Programs are installed at the versions in `versions.lock`. The FreeLLMAPI checkout is checked against its pinned commit, and the rtk and macOS Ollama archives against their SHA-256.
-- Outside installs and updates, Polytropos contacts GitHub only for stack-canary's public results. It downloads them at most once a day while its copy is good, and at most once an hour after a failed download. Installs and updates download from GitHub, npm and PyPI. When Polytropos does not run FreeLLMAPI, `hermes polytropos setup` runs FreeLLMAPI's CLI through `npx`, which contacts npm.
+- Outside installs and updates, Polytropos contacts GitHub only for stack-canary's public results. It downloads them at most once a day while its copy is good, and at most once an hour after a failed download. Installs and updates download from GitHub, npm and PyPI.
 
 ## WhatsApp pacing
 

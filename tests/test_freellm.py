@@ -317,15 +317,6 @@ def test_health_with_key_needs_200(tmp_home):
     assert seen[-1]["Authorization"] == "Bearer k"
 
 
-def test_cli_command(tmp_home):
-    lock = {"freellmapi": {"cli_version": "0.4.1"}}
-    f = make(tmp_home)
-    assert f.cli_command(lock) == ["npx", "freellmapi@0.4.1"]
-    state = State()
-    set_mode(state, "freellmapi", "managed")
-    save_state(state)
-    assert f.cli_command(lock) == ["node", str(f.root / "current/cli/dist/index.js")]
-
 
 # --- fix round 1 ---
 

@@ -152,11 +152,12 @@ def check_freellmapi(ctx: DoctorContext) -> list[CheckResult]:
                             f"Stop that program or free port {PORT}, then run hermes polytropos install")]
     key = api_key()  # never printed
     if not key:
-        return [CheckResult("warn", "this profile has no FREELLMAPI_API_KEY", fix="hermes polytropos setup")]
+        return [CheckResult("warn", "this profile has no FREELLMAPI_API_KEY",
+                            fix="hermes config set FREELLMAPI_API_KEY <key>")]
     status, _ = ctx.http_get(f"http://127.0.0.1:{PORT}/v1/models", {"Authorization": f"Bearer {key}"})
     if status == 401:
         return [CheckResult("warn", "FreeLLMAPI does not accept this profile's FREELLMAPI_API_KEY",
-                            fix="hermes polytropos setup")]
+                            fix="hermes config set FREELLMAPI_API_KEY <key>")]
     if status != 200:  # 0 and -1 are http_get's codes for no answer, never an HTTP status
         return [CheckResult("warn", f"FreeLLMAPI answers on port {PORT} but /v1/models is not healthy",
                             f"it returned HTTP {status}" if status > 0 else "FreeLLMAPI did not answer")]

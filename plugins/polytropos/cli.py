@@ -35,6 +35,9 @@ OWN_REPO = "Lil-Clanky/polytropos"
 ROUTER_KEY = "plugins.entries.polytropos-router."
 # None removes the key: Hermes prefers a configured model.context_length over the router's own window.
 ROUTER_DEFAULT = [("model.provider", "polytropos-router"), ("model.default", "auto"), ("model.context_length", None)]
+# The non-secret model keys. Uninstall restores them in reverse, so model.provider comes first: setting it drops
+# model.base_url and model.api_mode.
+MODEL_KEYS = ("model.base_url", "model.api_mode", "model.context_length", "model.default", "model.provider")
 PACK_PLUGINS = ("polytropos-router", "ponytail", "superpowers", "polytropos")
 PONYTAIL_QUESTION = "ponytail is not installed. Install it from its pinned commit?"
 PLUGIN_UPDATES = ("Hermes updates the Polytropos plugins themselves. After an install from the plugin catalog, run "
@@ -190,22 +193,15 @@ def _doctor(args, fx: Effects) -> int:
 # --- setup ---
 
 def _setup(args, fx: Effects) -> int:
-    lock = _lock()
-    if lock is None:
+    if not doctor.api_key():
+        print("This profile has no FREELLMAPI_API_KEY. Copy the unified API key from FreeLLMAPI's dashboard and store "
+              "it with this command, then run hermes polytropos setup again:")
+        print("  hermes config set FREELLMAPI_API_KEY <key>")
         return 1
     home, state = hermes_home(), load_state()
     url = f"http://127.0.0.1:{PORT}"
-    command = fx.fl().cli_command(lock) + ["setup-hermes"]
     if state.shared.get("freellmapi", {}).get("mode") == "external":
         url = re.sub(r"/v1$", "", (_answer(fx, f"FreeLLMAPI URL [{url}]: ") or url).rstrip("/"))
-        command += ["--url", url]
-    model = _get(_read_config(home), "model")  # setup-hermes rewrites this block, the user's own key included
-    if not _run(fx, command):
-        print("FreeLLMAPI's setup-hermes failed, so the router settings were not written.")
-        return 1
-    if (written := _get(_read_config(home), "model")) != model:  # before the keys below: uninstall restores it last
-        record_config_change(state, str(home), "model", model, written)
-        save_state(state)
     # In this order every step leaves a router config that parses.
     changes = [(ROUTER_KEY + "routes.complex", ["freellmapi/auto"]),
                (ROUTER_KEY + "routes.simple", ["freellmapi/auto"]),
@@ -573,20 +569,35 @@ def _remove_freellmapi(fl: FreeLLM) -> None:
     (fl.root / "current").unlink(missing_ok=True)
 
 
+def _restorable(changes: list[dict]) -> list[dict]:
+    """The recorded changes, each key once with its first old value. Polytropos 0.1.1 recorded the whole model block
+    under the key model, API key included; only its non-secret keys come back."""
+    restore = {}
+    for change in changes:
+        if change["key"] != "model":
+            restore.setdefault(change["key"], change)
+            continue
+        old = change["old"]
+        old = old if isinstance(old, dict) else {} if old is None else {"default": old}
+        if "api_key" in old:
+            print("The model section from before the setup held an api_key, which uninstall does not write back. "
+                  "If your model needs it, set it again with hermes config set model.api_key.")
+        for key in MODEL_KEYS:
+            restore.setdefault(key, {"key": key, "old": old.get(key.removeprefix("model.")), "new": None})
+    return list(restore.values())
+
+
 def _uninstall(args, fx: Effects) -> int:
     home, state = hermes_home(), load_state()
     profile, failed = str(home), 0
     current, kept = _read_config(home), []
-    for change in reversed(config_changes(state, profile)):
+    for change in reversed(_restorable(config_changes(state, profile))):
         key, old = change["key"], change["old"]
         if _get(current, key) == old:
             continue
-        # Without --force, Hermes refuses a block over the model block and puts a string into model.default.
-        force = ["--force"] if key == "model" else []
-        command = (["hermes", "config", "unset", key] if old is None
-                   else ["hermes", "config", "set", *force, key, _value(old)])
+        command = ["hermes", "config", "unset", key] if old is None else ["hermes", "config", "set", key, _value(old)]
         if not _run(fx, command):
-            if isinstance(old, dict):  # a block such as model can hold an API key, which no output may show
+            if isinstance(old, dict):  # a block can hold an API key, which no output may show
                 print(f"Restoring {key} failed. Its old value stays recorded in {paths.state_dir() / 'state.json'}, "
                       "and the next hermes polytropos uninstall tries again.")
             else:
@@ -726,7 +737,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     # The dest must differ from Hermes's own `command`, which names `polytropos` itself.
     sub = parser.add_subparsers(dest="polytropos_command", required=True, metavar="<command>")
     sub.add_parser("doctor", help="check the Polytropos setup")
-    sub.add_parser("setup", help="connect Hermes to FreeLLMAPI and write the router settings")
+    sub.add_parser("setup", help="write the router settings for FreeLLMAPI")
     p = sub.add_parser("install", help="install FreeLLMAPI, ponytail and the pinned programs")
     p.add_argument("--all-optional", action="store_true", help="also install every optional program")
     p.add_argument("--only", nargs="+", metavar="NAME", help="install only these parts")
