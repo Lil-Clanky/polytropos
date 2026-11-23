@@ -17,11 +17,17 @@ class AwakeHolder:
         self._proc = None
         self._warned = False
         hold = str(max_hold_s)
+        self._flags = 0
         if platform == "darwin":
             self._argv = ["caffeinate", "-i", "-t", hold]
         elif platform.startswith("linux"):
             self._argv = ["systemd-inhibit", "--what=idle:sleep", "--who=polytropos",
                           "--why=Hermes turn", "sleep", hold]
+        elif platform == "win32":
+            # ES_CONTINUOUS | ES_SYSTEM_REQUIRED keeps Windows from idle sleep until this child Python ends
+            self._argv = [sys.executable, "-c", "import ctypes, time; "
+                          f"ctypes.windll.kernel32.SetThreadExecutionState(0x80000001); time.sleep({hold})"]
+            self._flags = 0x08000000  # CREATE_NO_WINDOW: a gateway without a console gets no window for it
         else:
             self._argv = None
 
@@ -37,8 +43,8 @@ class AwakeHolder:
             # the process ends by itself after max_hold_s, so start a new one if it is gone
             if self._proc is None or self._proc.poll() is not None:
                 try:
-                    self._proc = self._popen(self._argv, stdin=subprocess.DEVNULL,
-                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self._proc = self._popen(self._argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.DEVNULL, creationflags=self._flags)
                 except OSError as exc:
                     self._proc = None
                     if not self._warned:

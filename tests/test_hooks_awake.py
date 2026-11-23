@@ -98,14 +98,24 @@ def test_double_acquire_single_release_and_stray_release():
 
 
 def test_commands_and_max_hold():
-    mac, lin, other = FakePopen(), FakePopen(), FakePopen()
+    mac, lin, win, other = FakePopen(), FakePopen(), FakePopen(), FakePopen()
     awake.AwakeHolder(platform="darwin", popen=mac, max_hold_s=60).acquire("a")
     awake.AwakeHolder(platform="linux", popen=lin).acquire("a")
-    awake.AwakeHolder(platform="win32", popen=other).acquire("a")
+    awake.AwakeHolder(platform="win32", popen=win, max_hold_s=60).acquire("a")
+    awake.AwakeHolder(platform="plan9", popen=other).acquire("a")
     assert mac.procs[0].argv == ["caffeinate", "-i", "-t", "60"]
     assert lin.procs[0].argv == ["systemd-inhibit", "--what=idle:sleep", "--who=polytropos",
                                  "--why=Hermes turn", "sleep", "7200"]
+    assert win.procs[0].argv == [sys.executable, "-c", "import ctypes, time; "
+                                 "ctypes.windll.kernel32.SetThreadExecutionState(0x80000001); time.sleep(60)"]
     assert other.procs == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the hold calls the Windows API")
+def test_windows_hold_runs_until_its_time_is_up():
+    holder = awake.AwakeHolder(max_hold_s=0)
+    holder.acquire("a")
+    assert holder._proc.wait(30) == 0  # the child Python ran SetThreadExecutionState without an error
 
 
 def test_missing_program_holds_nothing_and_logs_once(caplog):

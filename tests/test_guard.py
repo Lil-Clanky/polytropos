@@ -1,6 +1,7 @@
 import json
 import socketserver
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -178,6 +179,27 @@ def test_total_ram_macos_linux():
     assert guard.total_ram_bytes(platform="linux", read_text=meminfo) == 16000000 * 1024
     assert guard.total_ram_bytes(platform="darwin", run=fake_run({"hw.memsize": OSError()})) is None
     assert guard.total_ram_bytes(platform="linux", read_text=lambda p: (_ for _ in ()).throw(OSError())) is None
+
+
+def test_windows_memory_load_levels_and_total_ram():
+    def status(load):
+        return lambda: (load, 16 * GB)
+
+    for load, level in ((89, "normal"), (90, "warning"), (94, "warning"), (95, "critical")):
+        signals = guard.read_signals(platform="win32", memory_status=status(load), disk_path=Path("."))
+        assert (signals.pressure, signals.swap_bytes) == (level, None)
+    assert guard.read_signals(platform="win32", memory_status=lambda: None, disk_path=Path(".")).pressure == "unknown"
+    assert guard.total_ram_bytes(platform="win32", memory_status=status(50)) == 16 * GB
+    assert guard.total_ram_bytes(platform="win32", memory_status=lambda: None) is None
+
+
+def test_memory_status_reads_windows_and_is_none_elsewhere():
+    status = guard._memory_status()
+    if sys.platform == "win32":  # GlobalMemoryStatusEx on this machine
+        load, total = status
+        assert 0 <= load <= 100 and total > GB
+    else:
+        assert status is None
 
 
 def test_ollama_fit_against_fake():
