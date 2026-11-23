@@ -1,5 +1,6 @@
 import json
 import stat
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,9 @@ from polytropos.state import State, save_state, set_mode
 
 SHA = "a" * 40
 OLD, NEW = Pin("v0.16.8", SHA), Pin("v0.16.9", SHA)
+# Polytropos builds FreeLLMAPI, links its releases and runs it as a service only on macOS and Linux.
+NOT_ON_WINDOWS = "Polytropos does not run FreeLLMAPI on Windows"
+managed = pytest.mark.skipif(sys.platform == "win32", reason=NOT_ON_WINDOWS)
 
 
 class FakeRun:
@@ -106,6 +110,7 @@ def test_install_refuses_when_port_taken_by_unmanaged(tmp_home):
     assert run.calls == [] or all(c[0][0] == "node" for c in run.calls)  # nothing was built
 
 
+@managed
 def test_install_writes_service_spec_then_times_out(tmp_home):
     f = make(tmp_home, status=(0, b""))
     with pytest.raises(BuildError, match="answer"):  # the service never answers
@@ -121,6 +126,7 @@ def test_install_writes_service_spec_then_times_out(tmp_home):
     assert stat.S_IMODE((f.root / "data/.env").stat().st_mode) == 0o600
 
 
+@managed
 def test_install_succeeds_when_server_answers(tmp_home):
     f = make(tmp_home, status=(0, b""))
     orig = f.services.install
@@ -147,6 +153,7 @@ def test_build_verifies_commit(tmp_home):
     assert not (f.root / "releases/v0.16.9").exists()
 
 
+@managed
 def test_build_failed_step_removes_release(tmp_home):
     f = make(tmp_home, run=FakeRun(fail_on="npm ci"))
     with pytest.raises(BuildError, match="npm ci"):
@@ -154,6 +161,7 @@ def test_build_failed_step_removes_release(tmp_home):
     assert not (f.root / "releases/v0.16.9").exists()
 
 
+@managed
 def test_build_links_data(tmp_home):
     run = FakeRun()
     f = make(tmp_home, run=run)
@@ -165,6 +173,7 @@ def test_build_links_data(tmp_home):
     assert argvs[-2:] == [["npm", "ci"], ["npm", "run", "build"]]
 
 
+@managed
 def test_npm_gets_no_provider_keys(tmp_home, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
     run, envs = FakeRun(), {}
@@ -184,7 +193,7 @@ def test_ensure_env_once(tmp_home):
     first = path.read_text()
     assert len(first.strip().split("=", 1)[1]) == 64
     assert f.ensure_env().read_text() == first
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert sys.platform == "win32" or stat.S_IMODE(path.stat().st_mode) == 0o600  # Windows keeps no mode bits
 
 
 def test_ensure_env_reuses_key_file(tmp_home):
@@ -220,6 +229,8 @@ def test_backup_prunes_to_five(tmp_home):
 
 
 def _installed(tmp_home, **kw):
+    if sys.platform == "win32":
+        pytest.skip(NOT_ON_WINDOWS)
     f = make(tmp_home, **kw)
     f._data_dir()
     (f.root / "data/freeapi.db").write_text("old-data")
@@ -286,6 +297,7 @@ def test_rollback_without_backup(tmp_home):
     assert make(tmp_home).rollback().ok is False
 
 
+@managed
 def test_adopt_copies_data_and_refuses_while_running(tmp_home):
     src = tmp_home / "checkout"
     (src / "server/data").mkdir(parents=True)
@@ -377,6 +389,7 @@ def test_dirs_and_env_are_private(tmp_home):
     assert not list((f.root / "data").glob(".env.*"))  # temp file was replaced
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="time.tzset exists on macOS and Linux only")
 def test_backup_names_use_utc(tmp_home, monkeypatch):
     import time
     from datetime import datetime, timezone

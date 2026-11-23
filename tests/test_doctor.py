@@ -352,7 +352,8 @@ def test_key_files_report_names_and_modes_without_opening(ctx, monkeypatch):
     monkeypatch.setattr(Path, "read_text", no_read)
     got = d.check_key_files(ctx)
     assert [r.status for r in got] == ["warn", "warn"]
-    assert "my-keys.json (0644)" in got[0].detail and "contents not opened" in got[0].label
+    mode = f"{bad.stat().st_mode & 0o777:04o}"  # 0644, or 0666 on Windows, which keeps no mode bits
+    assert f"my-keys.json ({mode})" in got[0].detail and "contents not opened" in got[0].label
     assert ".env.backup2" in got[1].detail and "secret" not in got[0].detail
 
 

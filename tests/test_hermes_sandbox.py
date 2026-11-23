@@ -6,12 +6,15 @@ import sys
 import urllib.request
 from pathlib import Path
 
+import pytest
 import yaml
 
 import hermes_sandbox
 
 GATEWAY_ARGV = ["main.py", "gateway", "run", "--quiet", "--idle-exit"]  # as Hermes records an unmanaged daemon
 SLEEP = [sys.executable, "-c", "import time; time.sleep(60)"]
+# The sandbox drives a macOS or Linux Hermes: it finds and stops the gateway with ps and POSIX signals.
+posix = pytest.mark.skipif(sys.platform == "win32", reason="the sandbox stops the gateway with ps and signals")
 
 
 def test_make_home_writes_config_and_copies_plugins(tmp_path):
@@ -87,6 +90,7 @@ def _gone(pid):
     return not state or state.startswith("Z")
 
 
+@posix
 def test_stop_gateway_stops_the_daemon_of_this_home(tmp_path):
     home = tmp_path / "hermes"
     daemon = subprocess.Popen(SLEEP + GATEWAY_ARGV[1:])
@@ -115,6 +119,7 @@ def test_stop_gateway_leaves_other_processes_alone(tmp_path):
     assert hermes_sandbox.stop_gateway(tmp_path / "missing") is False
 
 
+@posix
 def test_stop_gateway_kills_a_daemon_that_ignores_sigterm(tmp_path):
     home = tmp_path / "hermes"
     code = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); time.sleep(60)"
@@ -142,6 +147,7 @@ with open(os.path.join(home, "gateway.pid"), "w") as f:
 """
 
 
+@posix
 def test_run_oneshot_stops_the_daemon_before_and_after(tmp_path, monkeypatch):
     home = hermes_sandbox.make_home(tmp_path, {}, [])
     fake = tmp_path / "fake-hermes"  # like `hermes -z`, it starts a gateway daemon for the home and exits

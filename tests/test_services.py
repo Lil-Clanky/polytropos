@@ -1,9 +1,15 @@
 import plistlib
+import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from polytropos.services import LAUNCHD_LABEL, SYSTEMD_UNIT, ServiceManager, ServiceSpec, render_launchd, render_systemd
+
+# Paths in a unit or a launchctl command are POSIX paths; Polytropos runs no service on Windows.
+posix_paths = pytest.mark.skipif(sys.platform == "win32", reason="service files hold POSIX paths")
 
 SPEC = ServiceSpec(
     program=["/opt/my node/bin/node", "/data/with space/current/server/dist/index.js"],
@@ -33,6 +39,7 @@ def test_plist_roundtrip():
     assert data["StandardOutPath"] == data["StandardErrorPath"] == str(SPEC.log_path)
 
 
+@posix_paths
 def test_systemd_quotes_spaces():
     text = render_systemd(SPEC)
     assert 'ExecStart="/opt/my node/bin/node" "/data/with space/current/server/dist/index.js"' in text
@@ -98,6 +105,7 @@ def test_macos_start_reloads_a_stopped_job(tmp_path):
     assert [c[1] for c in run_calls] == ["print", "bootstrap", "kickstart"]
 
 
+@posix_paths
 def test_manual_start_hint(tmp_path):
     mac = ServiceManager(platform="darwin", run=Runner(), home=tmp_path, uid=501).manual_start_hint()
     # `;`: kickstart also runs when bootstrap fails because the job is already loaded

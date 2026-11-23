@@ -45,6 +45,8 @@ def fake_canary(tmp_home, monkeypatch):
     script = bin_dir / "canary"
     script.write_text(FAKE_CANARY.format(python=sys.executable, secret=SECRET))
     script.chmod(0o755)
+    if sys.platform == "win32":  # no shebangs there: a .bat that run_command finds through PATHEXT starts the script
+        (bin_dir / "canary.bat").write_text(f'@"{sys.executable}" "{script}" %*\n')
     log = tmp_home / "canary-calls.jsonl"
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_CANARY_LOG", str(log))

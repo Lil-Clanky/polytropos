@@ -1,5 +1,6 @@
 import json
 import stat
+import sys
 
 from polytropos.state import (
     State, config_changes, load_state, record_config_change, release_shared, save_state, set_mode, use_shared,
@@ -13,7 +14,7 @@ def test_roundtrip_and_mode(tmp_home):
     record_config_change(state, "default", "model.default", "a", "b")
     save_state(state)
     path = tmp_home / ".local/state/polytropos/state.json"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert sys.platform == "win32" or stat.S_IMODE(path.stat().st_mode) == 0o600  # Windows keeps no mode bits
     assert load_state() == state
 
 

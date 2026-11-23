@@ -128,6 +128,7 @@ def test_sync_copies_versions_lock_into_the_general_plugin(tmp_path):
     assert check(tmp_path) == [str(copy)]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps no POSIX mode bits, so sync checks none there")
 def test_synced_copy_mode_is_0644_and_repaired(tmp_path):
     from sync_shared import check, sync
 

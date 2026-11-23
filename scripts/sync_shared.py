@@ -33,7 +33,7 @@ def _stale(root: Path):
 
 
 def _mode_ok(path: Path) -> bool:
-    return path.stat().st_mode & 0o777 == MODE
+    return sys.platform == "win32" or path.stat().st_mode & 0o777 == MODE  # Windows keeps no mode bits
 
 
 def sync(root: Path) -> list[Path]:
