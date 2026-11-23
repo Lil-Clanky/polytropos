@@ -19,8 +19,9 @@ from .state import load_state
 _VERSION = re.compile(r"\d+\.\d+\.\d+")
 # npm and uv run the scripts of the packages they install, so they get only what they need, not Hermes's provider keys.
 _ENV_NAMES = {"PATH", "HOME", "USER", "LOGNAME", "TERM", "LANG", "LANGUAGE", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY",
-              "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE"}
-_ENV_PREFIXES = ("LC_", "NPM_CONFIG_", "UV_", "XDG_")
+              "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
+              "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NVM_DIR", "VOLTA_HOME"}
+_ENV_PREFIXES = ("LC_", "NPM_CONFIG_", "UV_", "XDG_", "ASDF_", "MISE_")
 _ASSET_KEYS = {
     ("darwin", "arm64"): "darwin-arm64",
     ("darwin", "x86_64"): "darwin-x86_64",
@@ -221,7 +222,13 @@ def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], N
             if not ok:
                 print(f"The MCP server {cmd[3]} was not added. To add it, run: " + " ".join(cmd))
             continue
-        run(cmd, check=True, env=child_env() if cmd[0] in ("npm", "npx", "uv") else None)
+        env = child_env() if cmd[0] in ("npm", "npx", "uv") else None
+        if cmd[-1] == "setup-opencode":
+            from .freellm import api_key  # here, because freellm imports this module
+
+            if key := api_key():  # FreeLLMAPI's own CLI reads FreeLLMAPI's key, and asks for it without one
+                env["FREELLMAPI_API_KEY"] = key
+        run(cmd, check=True, env=env)
 
 
 def ponytail_fallback(lock: dict, run=subprocess.run) -> None:

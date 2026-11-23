@@ -169,7 +169,7 @@ def test_doctor_offers_the_router_as_default_model_after_a_clean_run(tmp_home, m
     monkeypatch.delenv("FREELLMAPI_API_KEY")  # without this profile's key the router could not answer
     assert cli.handle(parse("doctor"), cli.Effects(run=run, ask=no_questions)) == 0
     assert run.commands() == []
-    assert "To make the Polytropos router the default model, run: hermes polytropos setup" in capsys.readouterr().out
+    assert "with: hermes config set FREELLMAPI_API_KEY <key>" in capsys.readouterr().out
 
 
 def test_router_default_removes_model_context_length_and_uninstall_restores_it(tmp_home, monkeypatch):
@@ -552,6 +552,16 @@ def test_purge_data_waits_for_the_last_profile_and_a_typed_yes(tmp_home, monkeyp
     fx.ask = lambda q: "yes"
     assert cli.handle(parse("uninstall", "--purge-data"), fx) == 0
     assert not root.exists() and f"Deleted {root}." in capsys.readouterr().out
+
+
+def test_uninstall_removes_programs_without_provider_keys(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
+    progs, envs = {p.name: p for p in cli._programs(LOCK)}, []
+    fx = cli.Effects(run=lambda argv, **kw: envs.append((argv[:2], kw.get("env"))))
+    for name in ("qmd", "graphify"):
+        cli._remove_program(progs[name], fx)
+    assert [argv for argv, _ in envs] == [["npm", "uninstall"], ["uv", "tool"]]
+    assert all("OPENAI_API_KEY" not in env and env["PATH"] == os.environ["PATH"] for _, env in envs)
 
 
 def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home):

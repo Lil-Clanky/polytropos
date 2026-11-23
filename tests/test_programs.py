@@ -162,8 +162,10 @@ def test_context7_mcp_step_gets_no_terminal_input():
 
 def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-freellmapi-test-key")
     monkeypatch.setenv("npm_config_cache", "/tmp/npm-cache")
     monkeypatch.setenv("https_proxy", "http://proxy.test:3128")
+    monkeypatch.setenv("ASDF_DATA_DIR", "/tmp/asdf")
     progs = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))
     envs = {}
 
@@ -176,7 +178,9 @@ def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch):
     for tool in ("uv", "npm", "npx"):
         assert "OPENAI_API_KEY" not in envs[tool] and envs[tool]["PATH"] == os.environ["PATH"]
         assert envs[tool]["npm_config_cache"] == "/tmp/npm-cache"
-        assert envs[tool]["https_proxy"] == "http://proxy.test:3128"
+        assert envs[tool]["https_proxy"] == "http://proxy.test:3128" and envs[tool]["ASDF_DATA_DIR"] == "/tmp/asdf"
+    assert "FREELLMAPI_API_KEY" not in envs["npm"] and "FREELLMAPI_API_KEY" not in envs["uv"]
+    assert envs["npx"]["FREELLMAPI_API_KEY"] == "sk-freellmapi-test-key"  # only FreeLLMAPI's setup-opencode gets it
     assert envs["hermes"] is None and envs["graphify"] is None  # these work on the profile with Hermes's environment
 
 

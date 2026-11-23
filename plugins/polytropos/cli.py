@@ -177,7 +177,11 @@ def _doctor(args, fx: Effects) -> int:
         return 1
     if _get(_read_config(home), "model.provider") == "polytropos-router":
         return 0
-    answer = _ask_router_default(fx) if doctor.api_key() else None  # without the key the router cannot answer
+    if not doctor.api_key():  # without the key the router cannot answer
+        print("To use the Polytropos router, store FreeLLMAPI's unified API key with: "
+              "hermes config set FREELLMAPI_API_KEY <key>")
+        return 0
+    answer = _ask_router_default(fx)
     if answer is None:
         print("To make the Polytropos router the default model, run: hermes polytropos setup")
     elif answer:
@@ -519,9 +523,9 @@ def _remove_program(p: programs.Program, fx: Effects) -> None:
         spec = first[3]
         name = (spec.rsplit("@", 1)[0].rsplit("/", 1)[-1].removesuffix(".git") if spec.startswith("git+")
                 else spec.split("==")[0])
-        fx.run(["uv", "tool", "uninstall", name], check=True)
+        fx.run(["uv", "tool", "uninstall", name], check=True, env=programs.child_env())
     elif first[:3] == ["npm", "install", "-g"]:
-        fx.run(["npm", "uninstall", "-g", first[3].rsplit("@", 1)[0]], check=True)
+        fx.run(["npm", "uninstall", "-g", first[3].rsplit("@", 1)[0]], check=True, env=programs.child_env())
     else:
         print(f"Polytropos cannot remove {p.name} on this system. Remove it yourself.")
 
