@@ -53,7 +53,7 @@ class ServiceManager:
         self._mac = platform == "darwin"
         self._run = run
         self._home = home or Path.home()
-        self._uid = os.getuid() if uid is None else uid
+        self._uid = os.getuid() if uid is None and hasattr(os, "getuid") else uid  # Windows: no uid, and no service
 
     def path(self) -> Path:
         if self._mac:

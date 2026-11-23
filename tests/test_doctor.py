@@ -1,6 +1,7 @@
 import builtins
 import json
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -113,7 +114,7 @@ def test_freellmapi_not_running(ctx):
 def test_freellmapi_port_taken_by_another_program(ctx):
     ctx.http_get = lambda url, headers: (200, b"<html>hello</html>")
     r = only(d.check_freellmapi(ctx))
-    assert r.status == "fail" and "3001" in r.label and "not FreeLLMAPI" in r.label
+    assert r.status == "fail" and str(d.PORT) in r.label and "not FreeLLMAPI" in r.label
 
 
 def freellmapi_with_key(key, seen):
@@ -139,15 +140,17 @@ def test_freellmapi_health_uses_this_profiles_key(ctx, monkeypatch):
     set_mode(state, "freellmapi", "external")
     save_state(state)
     ok = only(d.check_freellmapi(ctx))
-    assert ok.status == "ok" and ok.label == "FreeLLMAPI, external, 127.0.0.1:3001"  # Polytropos knows no tag for it
+    assert ok.status == "ok" and ok.label == f"FreeLLMAPI, external, 127.0.0.1:{d.PORT}"  # Polytropos knows no tag for it
     assert {"Authorization": f"Bearer {key}"} in seen
     assert key not in d.format_report([no_key, refused, ok]) and "sk-another-key" not in d.format_report([refused])
+    if sys.platform == "win32":  # a managed release is a link, and Polytropos runs FreeLLMAPI on macOS and Linux only
+        return
     set_mode(state, "freellmapi", "managed")
     save_state(state)
     root = ctx.home / ".local" / "share" / "polytropos" / "freellmapi"
     (root / "releases" / "v0.16.30").mkdir(parents=True)
     (root / "current").symlink_to(root / "releases" / "v0.16.30")
-    assert only(d.check_freellmapi(ctx)).label == "FreeLLMAPI v0.16.30, managed, 127.0.0.1:3001"  # the running tag
+    assert only(d.check_freellmapi(ctx)).label == f"FreeLLMAPI v0.16.30, managed, 127.0.0.1:{d.PORT}"  # the running tag
 
 
 @pytest.mark.parametrize("status, detail", [(0, "FreeLLMAPI did not answer"), (-1, "FreeLLMAPI did not answer"),
@@ -182,6 +185,8 @@ def test_node_outside_freellmapis_range_fails_unless_freellmapi_is_external(ctx)
     save_state(state)
     r = only(d.check_node(ctx))
     assert r.status == "fail" and "not found" in r.label
+    ctx.platform = "win32"  # FreeLLMAPI's desktop app needs no Node
+    assert only(d.check_node(ctx)).status == "info"
 
 
 ROUTER = """

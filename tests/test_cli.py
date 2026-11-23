@@ -14,7 +14,7 @@ import yaml
 import polytropos
 from polytropos import cli, doctor, hooks, slash
 from polytropos._shared import guard, paths
-from polytropos.freellm import BuildError, Detected, Pin, PortBusy, UpdateResult
+from polytropos.freellm import DESKTOP_PORT, PORT, BuildError, Detected, Pin, PortBusy, UpdateResult
 from polytropos.programs import load_lock
 from polytropos.state import State, config_changes, load_state, record_config_change, save_state, set_mode, use_shared
 
@@ -23,6 +23,8 @@ LOCK = load_lock(ROOT / "versions.lock")
 R = "plugins.entries.polytropos-router."
 SHA_OLD, SHA_NEW = "a" * 40, "b" * 40
 GB = 1024**3
+# Polytropos builds FreeLLMAPI, links its releases and runs it as a service only on macOS and Linux.
+managed = pytest.mark.skipif(sys.platform == "win32", reason="Polytropos does not run FreeLLMAPI on Windows")
 
 
 def parse(*argv):
@@ -221,6 +223,7 @@ def test_doctor_checks_plugins_in_an_installed_home_without_a_pack_file(tmp_home
 
 # --- install ---
 
+@managed
 def test_install_refuses_when_another_program_holds_port_3001(tmp_home, capsys):
     run = FakeRun()
     fx = cli.Effects(run=run, http_get=lambda url, headers: (200, b"<html>not an API</html>"), ask=no_questions)
@@ -262,6 +265,7 @@ class FakeInstallFreeLLM:
     (True, BuildError("FreeLLMAPI did not answer on port 3001 within 60 s"), True),
     (False, BuildError("`npm ci` failed"), False),
 ])
+@managed
 def test_install_records_managed_mode_once_the_service_exists(tmp_home, writes_service, error, recorded):
     fl = FakeInstallFreeLLM(tmp_home / "service.plist", writes_service, error)
     fx = cli.Effects(run=FakeRun(), ask=no_questions, freellm=fl)
@@ -277,7 +281,29 @@ def test_install_rejects_unknown_names(tmp_home, capsys):
     assert "nope" in capsys.readouterr().out and run.calls == []
 
 
-def test_adopt_reads_the_checkout_from_from_path(tmp_home, capsys):
+def test_install_on_windows_points_at_the_desktop_app_and_builds_nothing(tmp_home, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(cli.platform, "machine", lambda: "AMD64")
+    run = FakeRun()
+    fx = cli.Effects(run=run, http_get=lambda url, headers: pytest.fail("FreeLLMAPI probed"), ask=no_questions,
+                     freellm=SimpleNamespace())  # any call on it fails the test
+    assert cli.handle(parse("install", "--only", "freellmapi"), fx) == 0
+    entry = load_state().shared["freellmapi"]
+    assert entry["mode"] == "external" and entry["installed_by_us"] is False and run.calls == []
+    out = capsys.readouterr().out
+    assert "https://apps.microsoft.com/detail/9PBN6G8K2B7F" in out and f"127.0.0.1:{DESKTOP_PORT}" in out
+    assert "the Keys page shows the unified API key" in out and "Next, run hermes polytropos setup." in out
+
+
+def test_adopt_on_windows_changes_nothing(tmp_home, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    fx = cli.Effects(run=FakeRun(), ask=no_questions, freellm=SimpleNamespace())
+    assert cli.handle(parse("adopt", "--from", str(tmp_home / "checkout")), fx) == 1
+    assert "desktop app" in capsys.readouterr().out and load_state().shared == {}
+
+
+def test_adopt_reads_the_checkout_from_from_path(tmp_home, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "linux")
     checkout = tmp_home / "checkout"
     args = parse("adopt", "--from", str(checkout))
     assert args.from_path == checkout and not hasattr(args, "source")  # Hermes's own --source has that destination
@@ -493,6 +519,7 @@ def test_update_freellmapi_shows_both_tags_and_the_compare_link_before_it_asks(t
 
 # --- uninstall ---
 
+@managed
 def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     home = tmp_home / ".hermes"
     (home / "plugins" / "polytropos").mkdir(parents=True)
@@ -755,7 +782,7 @@ def test_commands_that_cannot_start_are_reported_and_keep_the_state(tmp_home, mo
 
 # --- setup ---
 
-UPSTREAM = {"base_url": "http://127.0.0.1:3001/v1", "api_key_env": "FREELLMAPI_API_KEY"}
+UPSTREAM = {"base_url": f"http://127.0.0.1:{PORT}/v1", "api_key_env": "FREELLMAPI_API_KEY"}  # 31415 on Windows
 USER_MODEL = {"provider": "openrouter", "default": "some/model", "api_key": "sk-user-test-key"}
 # What FreeLLMAPI's setup-hermes, which the setup of Polytropos 0.1.1 ran, left in the model block
 # (~/freellmapi/cli/src/tools.ts, function hermes).

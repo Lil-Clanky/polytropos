@@ -165,6 +165,8 @@ def check_node(ctx: DoctorContext) -> list[CheckResult]:
     ok, found = FreeLLM(run=ctx.run).node_ok()
     if ok:
         return [CheckResult("ok", f"Node {found}")]
+    if ctx.platform == "win32":  # FreeLLMAPI's desktop app brings its own runtime
+        return [CheckResult("info", found, "on Windows FreeLLMAPI runs as its desktop app, which needs no Node")]
     if load_state().shared.get("freellmapi", {}).get("mode") == "external":
         return [CheckResult("info", found, "FreeLLMAPI runs in external mode, so Polytropos does not run it")]
     return [CheckResult("fail", found, fix="Install Node 22 or 24 for FreeLLMAPI, for example from "

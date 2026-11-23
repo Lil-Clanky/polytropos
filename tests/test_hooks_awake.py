@@ -225,8 +225,8 @@ def test_config_comes_from_the_active_profile(env, tmp_home, monkeypatch):
 
 def test_non_loopback_and_default_ports():
     assert not hooks._is_local("https://api.example.com/v1")
-    assert not hooks._is_local("http://127.0.0.1:3001/v1")
-    assert not hooks._is_local("http://localhost:3001")
+    assert not hooks._is_local(f"http://127.0.0.1:{hooks.ROUTER_PORT}/v1")  # FreeLLMAPI
+    assert not hooks._is_local(f"http://localhost:{hooks.ROUTER_PORT}")
     assert not hooks._is_local("http://127.0.0.1:99999/v1")
     assert not hooks._is_local(None)
     assert hooks._is_local("http://localhost:11434")

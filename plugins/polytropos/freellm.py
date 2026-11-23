@@ -6,6 +6,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -22,7 +23,11 @@ from .services import ServiceManager, ServiceSpec
 from .state import load_state
 
 REPO_URL = "https://github.com/tashfeenahmed/freellmapi.git"
-PORT = 3001
+# On Windows Polytropos uses FreeLLMAPI's desktop app (desktop/src/main.ts: DEFAULT_PORT 31415, on 127.0.0.1).
+# shortcut: the app moves to the next free port when its port is taken and keeps that one; setup asks the URL, but
+# the doctor checks 31415 only. Read "port" from %APPDATA%\FreeLLMAPI\config.json when users run into that.
+DESKTOP_PORT = 31415
+PORT = DESKTOP_PORT if sys.platform == "win32" else 3001
 _URL = f"http://127.0.0.1:{PORT}/v1/models"
 _DATA_FILES = ("freeapi.db", "freeapi.db-wal", "freeapi.db-shm", ".encryption-key", ".env")  # WAL is on in FreeLLMAPI
 _SECRET_FILES = {".encryption-key", ".env"}

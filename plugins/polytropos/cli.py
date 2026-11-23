@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 from . import doctor, programs
 from ._shared import canary, paths
-from .freellm import PORT, REPO_URL, FreeLLM, Pin, PortBusy, _default_get
+from .freellm import DESKTOP_PORT, PORT, REPO_URL, FreeLLM, Pin, PortBusy, _default_get
 from .services import ServiceManager
 from .state import (State, config_changes, load_state, record_config_change, release_shared, save_state, set_mode,
                     use_shared)
@@ -40,6 +40,13 @@ PONYTAIL_QUESTION = "ponytail is not installed. Install it from its pinned commi
 PLUGIN_UPDATES = ("Hermes updates the Polytropos plugins themselves. After an install from the plugin catalog, run "
                   "hermes plugins update. After a pack install, run hermes plugins pack install --force with the "
                   "hermes-pack.yaml of the newer release.")
+# FreeLLMAPI's README: the Store app is signed and updates itself; the Releases .exe is the same app, unsigned.
+# desktop/src/tray-platform.ts: on Windows a click on the tray icon opens the dashboard.
+WINDOWS_FREELLMAPI = (
+    "On Windows FreeLLMAPI runs as its own desktop app, and Polytropos uses it as it is. Install it from the "
+    "Microsoft Store (https://apps.microsoft.com/detail/9PBN6G8K2B7F), which keeps it updated, or from "
+    "https://github.com/tashfeenahmed/freellmapi/releases, and open it. It serves the API on "
+    f"127.0.0.1:{DESKTOP_PORT}. Click its tray icon to open the dashboard: the Keys page shows the unified API key.")
 _HERE = Path(__file__).resolve()
 
 
@@ -354,7 +361,12 @@ def _install(args, fx: Effects) -> int:
         print(f"Unknown name: {', '.join(sorted(only - set(known)))}. Known names: {', '.join(known)}.")
         return 1
     failed = 0
-    if not only or "freellmapi" in only:
+    if (not only or "freellmapi" in only) and sys.platform == "win32":  # nothing to build or run as a service
+        use_shared(state, "freellmapi", profile, version="", installed_by_us=False)
+        set_mode(state, "freellmapi", "external")
+        save_state(state)
+        print(WINDOWS_FREELLMAPI)
+    elif not only or "freellmapi" in only:
         fl, pin = fx.fl(), _pin(lock)
         found = fl.detect()
         if found.listening and not found.is_freellmapi:
@@ -395,6 +407,10 @@ def _install(args, fx: Effects) -> int:
 def _adopt(args, fx: Effects) -> int:
     lock = _lock()
     if lock is None:
+        return 1
+    if sys.platform == "win32":
+        print("On Windows Polytropos does not run FreeLLMAPI as a service, so it adopts no checkout. Open "
+              "FreeLLMAPI's desktop app instead; hermes polytropos install says where to get it.")
         return 1
     pin = _pin(lock)
     try:
