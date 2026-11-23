@@ -35,9 +35,6 @@ OWN_REPO = "Lil-Clanky/polytropos"
 ROUTER_KEY = "plugins.entries.polytropos-router."
 # None removes the key: Hermes prefers a configured model.context_length over the router's own window.
 ROUTER_DEFAULT = [("model.provider", "polytropos-router"), ("model.default", "auto"), ("model.context_length", None)]
-# The non-secret model keys. Uninstall restores them in reverse, so model.provider comes first: setting it drops
-# model.base_url and model.api_mode.
-MODEL_KEYS = ("model.base_url", "model.api_mode", "model.context_length", "model.default", "model.provider")
 PACK_PLUGINS = ("polytropos-router", "ponytail", "superpowers", "polytropos")
 PONYTAIL_QUESTION = "ponytail is not installed. Install it from its pinned commit?"
 PLUGIN_UPDATES = ("Hermes updates the Polytropos plugins themselves. After an install from the plugin catalog, run "
@@ -561,31 +558,18 @@ def _remove_freellmapi(fl: FreeLLM) -> None:
     (fl.root / "current").unlink(missing_ok=True)
 
 
-def _restorable(changes: list[dict]) -> list[dict]:
-    """The recorded changes, each key once with its first old value. Polytropos 0.1.1 recorded the whole model block
-    under the key model, API key included; only its non-secret keys come back."""
-    restore = {}
-    for change in changes:
-        if change["key"] != "model":
-            restore.setdefault(change["key"], change)
-            continue
-        old = change["old"]
-        old = old if isinstance(old, dict) else {} if old is None else {"default": old}
-        if "api_key" in old:
-            print("The model section from before the setup held an api_key, which uninstall does not write back. "
-                  "If your model needs it, set it again with hermes config set model.api_key.")
-        for key in MODEL_KEYS:
-            restore.setdefault(key, {"key": key, "old": old.get(key.removeprefix("model.")), "new": None})
-    return list(restore.values())
-
-
 def _uninstall(args, fx: Effects) -> int:
     home, state = hermes_home(), load_state()
-    profile, failed = str(home), 0
-    current, kept = _read_config(home), []
-    for change in reversed(_restorable(config_changes(state, profile))):
+    profile, failed, kept = str(home), 0, []
+    for change in reversed(config_changes(state, profile)):
         key, old = change["key"], change["old"]
-        if _get(current, key) == old:
+        current = _get(_read_config(home), key)  # read each time: setting model.provider drops other model keys
+        if change.get("old_dropped"):
+            print("The model section from before the setup held an api_key, which uninstall does not write back. "
+                  "If your model needs it, set it again with hermes config set model.api_key.")
+        if key == "model.api_key" and current != change["new"]:  # only setup's pointer goes; a key set since stays
+            continue
+        if current == old:
             continue
         command = ["hermes", "config", "unset", key] if old is None else ["hermes", "config", "set", key, _value(old)]
         if not _run(fx, command):

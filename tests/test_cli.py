@@ -786,43 +786,49 @@ def test_setup_writes_single_keys_and_records_no_secret(tmp_home, monkeypatch):
     assert USER_MODEL["api_key"] not in (paths.state_dir() / "state.json").read_text()
 
 
-def test_uninstall_restores_only_the_non_secret_keys_of_a_legacy_model_record(tmp_home, capsys):
+def test_uninstall_of_a_legacy_model_record_writes_no_secret_back(tmp_home, capsys):
     home = tmp_home / ".hermes"
     home.mkdir()
     (home / "config.yaml").write_text(yaml.safe_dump({"model": {
-        "provider": "polytropos-router", "default": "auto", "api_key": "${FREELLMAPI_API_KEY}"}}))
+        "provider": "polytropos-router", "default": "auto", "api_key": "${FREELLMAPI_API_KEY}",
+        "default_headers": FREELLM_MODEL["default_headers"]}}))
     state = State()  # as the setup of Polytropos 0.1.1 left it
-    record_config_change(state, str(home), "model", USER_MODEL, FREELLM_MODEL)
+    record_config_change(state, str(home), "model", {**USER_MODEL, "key_env": "MY_PROVIDER_KEY"}, FREELLM_MODEL)
     for key, old, new in (("model.base_url", FREELLM_MODEL["base_url"], None),
                           ("model.api_mode", "chat_completions", None),
                           ("model.provider", "custom", "polytropos-router"),
                           ("model.default", "free-model", "auto"), ("model.context_length", 131072, None)):
         record_config_change(state, str(home), key, old, new)
     save_state(state)
-    run = FakeRun(fail=[("hermes", "config", "set", "model.default")])
-    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 1
-    assert run.commands() == [["hermes", "config", "set", "model.provider", "openrouter"],
+    run = FakeRun()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands() == [["hermes", "config", "unset", "model.api_key"],
+                              ["hermes", "config", "set", "model.provider", "openrouter"],
+                              ["hermes", "config", "set", "model.key_env", "MY_PROVIDER_KEY"],
+                              ["hermes", "config", "unset", "model.default_headers"],
                               ["hermes", "config", "set", "model.default", "some/model"]]
     out = capsys.readouterr().out
     assert "held an api_key, which uninstall does not write back" in out and USER_MODEL["api_key"] not in out
-    assert config_changes(load_state(), str(home)) == [{"key": "model.default", "old": "some/model", "new": None}]
+    assert str(home) not in load_state().profiles
     assert USER_MODEL["api_key"] not in (paths.state_dir() / "state.json").read_text()
 
 
-def test_uninstall_brings_back_a_model_that_was_a_string(tmp_home):
+def test_uninstall_brings_back_a_model_that_was_a_string(tmp_home, capsys):
     home = tmp_home / ".hermes"
     home.mkdir()
-    (home / "config.yaml").write_text(yaml.safe_dump({"model": FREELLM_MODEL}))
+    (home / "config.yaml").write_text(yaml.safe_dump({"model": {**FREELLM_MODEL, "api_key": "sk-own-since"}}))
     state = State()
     record_config_change(state, str(home), "model", "openrouter/some-model", FREELLM_MODEL)
     save_state(state)
     run = FakeRun()
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
-    assert run.commands() == [["hermes", "config", "unset", "model.provider"],
+    assert run.commands() == [["hermes", "config", "unset", "model.provider"],  # model.api_key was set since: it stays
+                              ["hermes", "config", "unset", "model.default_headers"],
                               ["hermes", "config", "set", "model.default", "openrouter/some-model"],
                               ["hermes", "config", "unset", "model.context_length"],
-                              ["hermes", "config", "unset", "model.api_mode"],
-                              ["hermes", "config", "unset", "model.base_url"]]
+                              ["hermes", "config", "unset", "model.base_url"],
+                              ["hermes", "config", "unset", "model.api_mode"]]
+    assert "api_key" not in capsys.readouterr().out
 
 
 def test_setup_stops_at_a_failed_key_and_keeps_what_it_recorded(tmp_home, monkeypatch, capsys):
