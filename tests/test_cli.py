@@ -373,7 +373,7 @@ class FakeFreeLLM:
 
 def default_integrations(home):
     """What rtk, graphify and ast-grep add to the default profile, so install and update find nothing missing."""
-    for folder in ("plugins/rtk", "skills/graphify", "skills/software-development/ast-grep"):
+    for folder in ("plugins/rtk-rewrite", "skills/graphify", "skills/software-development/ast-grep"):
         (home / folder).mkdir(parents=True, exist_ok=True)
 
 
@@ -634,7 +634,7 @@ def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(t
            "added": str(home / "skills" / "research" / "qmd")}
     state = State()
     state.profiles[str(home)] = {"integrations": [
-        {"ran": rtk, "added": str(home / "plugins" / "rtk")},
+        {"ran": rtk, "added": str(home / "plugins" / "rtk-rewrite")},
         {"ran": ["graphify", "install", "--platform", "hermes"], "added": str(graphify)}, qmd]}
     save_state(state)
     run = FakeRun(fail=[("hermes", "skills", "uninstall")])
@@ -651,7 +651,7 @@ def test_rtk_works_on_this_profile_and_graphify_on_hermess_default_home(tmp_home
     monkeypatch.setenv("HERMES_HOME", str(home))
     rtk = [str(tmp_home / ".local" / "bin" / "rtk"), "init", "--agent", "hermes"]
     state = State()
-    state.profiles[str(home)] = {"integrations": [{"ran": rtk, "added": str(home / "plugins" / "rtk")}]}
+    state.profiles[str(home)] = {"integrations": [{"ran": rtk, "added": str(home / "plugins" / "rtk-rewrite")}]}
     save_state(state)
     envs = []
     run = lambda argv, **kw: envs.append(kw.get("env")) or SimpleNamespace(returncode=0)  # noqa: E731
@@ -662,6 +662,18 @@ def test_rtk_works_on_this_profile_and_graphify_on_hermess_default_home(tmp_home
     assert cli._added_by(graphify, home) == tmp_home / "AppData" / "Local" / "hermes" / "skills" / "graphify"
     monkeypatch.setattr(cli.paths.sys, "platform", "linux")
     assert cli._added_by(graphify, home) == tmp_home / ".hermes" / "skills" / "graphify"
+
+
+def test_install_records_rtks_hermes_plugin_and_uninstall_undoes_it(tmp_home):
+    home = tmp_home / ".hermes"
+    init = [cli._programs(LOCK)[0].version_cmd[0], "init", "--agent", "hermes"]
+    plugin = home / "plugins" / "rtk-rewrite"  # where rtk 1.2.1 puts it
+    run = FakeRun(versions={"rtk": LOCK["rtk"]["version"]}, on={tuple(init): lambda argv: plugin.mkdir(parents=True)})
+    assert cli.handle(parse("install", "--only", "rtk"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert load_state().profiles[str(home)] == {"integrations": [{"ran": init, "added": str(plugin)}]}
+    run = FakeRun()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert [c for c in run.commands() if c[0] == init[0]] == [[*init, "--uninstall"]]
 
 
 def test_install_records_setup_opencode_when_it_changes_opencodes_config(tmp_home, monkeypatch):

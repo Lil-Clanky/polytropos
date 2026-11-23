@@ -261,8 +261,8 @@ def _added_by(command: list[str], home: Path) -> Path | str | None:
         return home / "skills" / Path(*command[3].split("/")[1:])
     if command[:3] == ["hermes", "mcp", "add"]:
         return f"mcp_servers.{command[3]}"
-    if command[1:] == ["init", "--agent", "hermes"]:  # rtk's Hermes plugin
-        return home / "plugins" / "rtk"
+    if command[1:] == ["init", "--agent", "hermes"]:  # rtk's Hermes plugin (rtk's src/hooks/constants.rs)
+        return home / "plugins" / "rtk-rewrite"
     if command == ["graphify", "install", "--platform", "hermes"]:  # graphify ignores HERMES_HOME (install.py)
         return paths.default_hermes_home() / "skills" / "graphify"
     if command[-1:] == ["setup-opencode"]:  # FreeLLMAPI's CLI merges its provider into OpenCode's config (tools.ts)
