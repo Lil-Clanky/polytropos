@@ -10,8 +10,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ._shared import bridge, guard
-from ._shared.paths import hermes_home
 from .awake import AwakeHolder
+from .cli import hermes_home
 
 try:
     from hermes_yaml import safe_load
@@ -59,7 +59,6 @@ def _is_local(base_url) -> bool:
 
 
 def _config_provider(model) -> tuple[Any, Any]:
-    # shortcut: HERMES_HOME is the launch profile's; a gateway serving several profiles may read the wrong file
     try:
         section = safe_load((hermes_home() / "config.yaml").read_text()).get("model")
         if isinstance(section, dict) and section.get("default") == model:

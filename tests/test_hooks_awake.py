@@ -1,5 +1,7 @@
+import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -199,6 +201,16 @@ def test_other_model_than_config_default_is_unknown(env, tmp_home):
 
 def test_missing_config_is_unknown(env):
     assert turn() is None
+
+
+def test_config_comes_from_the_active_profile(env, tmp_home, monkeypatch):
+    profile = tmp_home / ".hermes" / "profiles" / "work"
+    profile.mkdir(parents=True)
+    (profile / "config.yaml").write_text(
+        f"model:\n  default: llama3.2:3b\n  provider: llama-cpp\n  base_url: {LLAMA}\n")
+    # In a gateway that serves several profiles, Hermes names the turn's profile here and not in HERMES_HOME.
+    monkeypatch.setitem(sys.modules, "hermes_constants", SimpleNamespace(get_hermes_home=lambda: profile))
+    assert turn()["action"] == "block"
 
 
 def test_non_loopback_and_default_ports():

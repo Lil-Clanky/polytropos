@@ -351,7 +351,7 @@ During a request to a local upstream the watchdog reads the signals every 2 seco
 
 ### Guard hook
 
-Sessions that use a local model without the router get the guard through a `pre_llm_call` hook. A session counts as local when its provider is not `polytropos-router` and its base URL is on this machine (`localhost` or a loopback address) with a port other than 3001, the FreeLLMAPI port. The hook takes the provider from Hermes's last API request of the session, or from `model` in `config.yaml` when the turn uses the default model. When the provider is unknown, the turn goes ahead. When the guard refuses, the turn ends with this message.
+Sessions that use a local model without the router get the guard through a `pre_llm_call` hook. A session counts as local when its provider is not `polytropos-router` and its base URL is on this machine (`localhost` or a loopback address) with a port other than 3001, the FreeLLMAPI port. The hook takes the provider from Hermes's last API request of the session, or from `model` in the `config.yaml` of the turn's profile when the turn uses the default model. When the provider is unknown, the turn goes ahead. When the guard refuses, the turn ends with this message.
 
 > Polytropos paused this turn because <reason>. A local model can freeze this machine at this level. Switch to a cloud model with /model, or wait and try again.
 
