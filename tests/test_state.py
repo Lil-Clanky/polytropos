@@ -74,8 +74,9 @@ def test_a_model_record_of_0_1_1_is_split_and_keeps_no_api_key(tmp_home):
 def test_a_string_model_record_of_0_1_1_becomes_model_default(tmp_home):
     path = tmp_home / ".local/state/polytropos/state.json"
     path.parent.mkdir(parents=True)
+    new = {"default": "free-model", "api_key": "sk-literal"}
     path.write_text(json.dumps({"version": 1, "shared": {}, "profiles": {"p": {"config_changes": [
-        {"key": "model", "old": "openrouter/some-model", "new": {"default": "free-model", "api_key": "sk-literal"}}]}}}))
+        {"key": "model", "old": "openrouter/some-model", "new": new}]}}}))
     assert config_changes(load_state(), "p") == [
         {"key": "model.default", "old": "openrouter/some-model", "new": "free-model"}]
     assert "sk-literal" not in path.read_text()

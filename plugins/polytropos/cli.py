@@ -466,8 +466,9 @@ def _update_freellmapi(lock: dict, state: State, profile: str, fx: Effects) -> i
 
 
 def _update(args, fx: Effects) -> int:
-    """Moves ponytail, the programs and FreeLLMAPI to the pins in the installed plugin's versions.lock. It never updates
-    the Polytropos plugins themselves: Hermes does that, so every new plugin commit is one that Hermes installs."""
+    """Moves the programs and FreeLLMAPI to the pins in the installed plugin's versions.lock, and checks ponytail as
+    install does. It never updates the Polytropos plugins themselves: Hermes does that, so every new plugin commit is
+    one that Hermes installs."""
     if (lock := _lock()) is None:
         return 1
     home, state, everything = hermes_home(), load_state(), args.component == "all"
@@ -724,7 +725,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     p = sub.add_parser("adopt", help="run an existing FreeLLMAPI checkout as the Polytropos service")
     p.add_argument("--from", dest="from_path", type=Path, required=True, metavar="PATH",  # Hermes's --source uses "source"
                    help="the FreeLLMAPI checkout whose data to take over")
-    p = sub.add_parser("update", help="update ponytail, the programs and FreeLLMAPI to the pinned versions")
+    p = sub.add_parser("update", help="update the programs and FreeLLMAPI to the pinned versions")
     p.add_argument("component", nargs="?", choices=("freellmapi", "programs", "all"), default="all")
     p = sub.add_parser("rollback", help="restore FreeLLMAPI from the backup of its last update")
     p.add_argument("part", choices=("freellmapi",))

@@ -141,7 +141,7 @@ A running gateway keeps the old plugin code until it restarts. Hermes prints `he
 hermes polytropos update
 ```
 
-`update` brings ponytail, the programs and FreeLLMAPI, when Polytropos runs it, to the versions that the installed polytropos plugin pins in its `versions.lock`. It asks before it changes anything. `hermes polytropos update programs` and `hermes polytropos update freellmapi` update one part.
+`update` brings the programs and FreeLLMAPI, when Polytropos runs it, to the versions that the installed polytropos plugin pins in its `versions.lock`. It installs a missing ponytail after a yes, and for a ponytail at another commit it prints the command that moves it. It asks before it changes anything. `hermes polytropos update programs` and `hermes polytropos update freellmapi` update one part.
 
 `update` does not change the Polytropos plugins themselves. Hermes updates those, so each new plugin commit goes through Hermes's own install and scan. After a catalog install, `hermes plugins update` moves the plugins to the commit the catalog pins. After a pack install, download `hermes-pack.yaml` of the newer release, or pull your clone, and run `hermes plugins pack install --force` on it. Then run `hermes polytropos update` to bring the other parts to the versions of that release.
 

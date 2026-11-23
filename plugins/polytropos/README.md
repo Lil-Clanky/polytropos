@@ -36,7 +36,7 @@ The full list is in [What Polytropos runs and changes](../../README.md#what-poly
 
 ## Updates
 
-`hermes plugins update` moves this plugin to the commit the catalog pins. `hermes polytropos update` then brings ponytail, the programs and FreeLLMAPI to the versions this plugin pins.
+`hermes plugins update` moves this plugin to the commit the catalog pins. `hermes polytropos update` then brings the programs and FreeLLMAPI to the versions this plugin pins, and says how to move ponytail.
 
 ## License
 

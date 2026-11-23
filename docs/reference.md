@@ -26,7 +26,7 @@ The polytropos plugin adds `hermes polytropos <command>` to Hermes. Every comman
 | `setup` | Connects Hermes to FreeLLMAPI and writes the router settings |
 | `install [--all-optional] [--only NAME ...]` | Installs FreeLLMAPI, ponytail and the pinned programs |
 | `adopt --from PATH` | Runs an existing FreeLLMAPI checkout as the Polytropos service |
-| `update [freellmapi \| programs \| all]` | Updates ponytail, the programs and FreeLLMAPI, or one part, to the versions the installed plugin pins |
+| `update [freellmapi \| programs \| all]` | Updates the programs and FreeLLMAPI, or one of them, to the versions the installed plugin pins, and checks ponytail |
 | `rollback freellmapi` | Restores FreeLLMAPI from the backup of its last update |
 | `canary run` | Runs the stack-canary tool checks on the cloud models |
 | `status` | Shows FreeLLMAPI health, the guard verdict and the last router decision |
@@ -112,7 +112,7 @@ When port 3001 still answers, adopt prints how to stop the old FreeLLMAPI and ke
 
 ### update
 
-`hermes polytropos update [freellmapi | programs | all]`, with `all` as the default. Update moves parts to the versions in the `versions.lock` of the installed polytropos plugin, the file that `install` and the doctor read. `all` moves ponytail, the programs and FreeLLMAPI, and `programs` and `freellmapi` move one part. Update fetches nothing from the Polytropos repository and never changes the Polytropos plugins. Hermes updates those, with `hermes plugins update` after a catalog install, or `hermes plugins pack install --force` on the pack file of a newer release after a pack install.
+`hermes polytropos update [freellmapi | programs | all]`, with `all` as the default. Update moves parts to the versions in the `versions.lock` of the installed polytropos plugin, the file that `install` and the doctor read. `all` moves the programs and FreeLLMAPI and checks ponytail, and `programs` and `freellmapi` move one part. Update fetches nothing from the Polytropos repository and never changes the Polytropos plugins. Hermes updates those, with `hermes plugins update` after a catalog install, or `hermes plugins pack install --force` on the pack file of a newer release after a pack install.
 
 1. When Polytropos runs FreeLLMAPI and the pinned tag differs from the installed one, update prints both tags and `https://github.com/tashfeenahmed/freellmapi/compare/<installed tag>...<new tag>`. `update programs` skips this. When FreeLLMAPI is already on the pinned tag, `update freellmapi` prints `FreeLLMAPI is already on <tag>.` and stops.
 2. It asks `Update ponytail, the programs and FreeLLMAPI to the versions Polytropos pins? [y/N]`. With `programs` it asks `Update the programs to the versions Polytropos pins? [y/N]`. With `freellmapi` it asks `Update FreeLLMAPI to <tag>? [y/N]`, or `Update FreeLLMAPI from <installed tag> to <new tag>? [y/N]` when Polytropos runs another tag. Any answer other than yes prints `Nothing changed.`
