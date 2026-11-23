@@ -251,7 +251,7 @@ The router reads its settings from `plugins.entries.polytropos-router` in the pr
 | `save_traces` | `false` | Write a trace line per request |
 | `cloud_window_default` | `128000` | Window assumed for a cloud upstream without `context_window` |
 
-Without an `upstreams` key the router has one upstream, `freellmapi`, with `base_url: http://127.0.0.1:3001/v1` and `api_key_env: FREELLMAPI_API_KEY`. A missing `routes` then means `simple` and `complex` both `[freellmapi/auto]`, and a missing `classifier` means `freellmapi/auto`. Once you set `upstreams`, it replaces the default upstream, `routes` is required and a missing `classifier` means no classifier.
+Without an `upstreams` key the router has one upstream, `freellmapi`, with `base_url: http://127.0.0.1:3001/v1`, or `http://127.0.0.1:31415/v1` on Windows, and `api_key_env: FREELLMAPI_API_KEY`. A missing `routes` then means `simple` and `complex` both `[freellmapi/auto]`, and a missing `classifier` means `freellmapi/auto`. Once you set `upstreams`, it replaces the default upstream, `routes` is required and a missing `classifier` means no classifier.
 
 Every route entry must name a known upstream, and `default_route` and every channel hint must name a route. The classifier only answers `simple` or `complex`, so a route with another name is reached through `default_route` or a channel hint only. When the settings have an error, the router runs on the built-in defaults above, logs a warning, and the doctor shows the error.
 
