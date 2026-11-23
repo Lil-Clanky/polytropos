@@ -41,7 +41,7 @@ def probe(argv):
 
 
 class FakeRun:
-    """Records argv. A probe prints versions[name] (the name without its folder) or raises FileNotFoundError.
+    """Records argv. A probe prints versions[name] (the name without its folder and .exe) or raises FileNotFoundError.
     A command that starts with a prefix in `fail` exits 1; `on` maps a prefix to a side effect."""
 
     def __init__(self, versions=None, fail=(), on=None):
@@ -51,7 +51,7 @@ class FakeRun:
         argv = [str(a) for a in argv]
         self.calls.append(argv)
         if probe(argv):
-            name = Path(argv[0]).name
+            name = Path(argv[0]).name.removesuffix(".exe")
             if name not in self.versions:
                 raise FileNotFoundError(argv[0])
             return SimpleNamespace(returncode=0, stdout=f"{name} {self.versions[name]}\n", stderr="")
@@ -306,7 +306,7 @@ def test_adopt_says_how_to_stop_the_old_freellmapi_and_stops_nothing(tmp_home, m
 
 
 def test_a_failed_integration_step_says_the_program_was_not_set_up_for_this_profile(tmp_home, capsys):
-    rtk = str(tmp_home / ".local" / "bin" / "rtk")
+    rtk = cli._programs(LOCK)[0].version_cmd[0]  # ~/.local/bin/rtk, rtk.exe on Windows
     run = FakeRun(versions={"rtk": LOCK["rtk"]["version"]}, fail=[(rtk, "init")])
     assert cli.handle(parse("install", "--only", "rtk"), cli.Effects(run=run, ask=no_questions)) == 1
     out = capsys.readouterr().out
@@ -889,3 +889,12 @@ def test_slash_shows_health_guard_and_last_decision(tmp_home, monkeypatch):
     assert "FreeLLMAPI: healthy" in out and "memory pressure is warning" in out
     assert "simple" in out and "classifier" in out and "local/llama3.2:3b" in out
     assert FakeSlashFreeLLM.keys == ["sk-test-secret"] and "sk-test-secret" not in out
+
+
+def test_uninstall_deletes_rtk_exe_on_windows(tmp_home):
+    rtk = {p.name: p for p in cli.programs.programs(LOCK, platform="win32", machine="AMD64")}["rtk"]
+    exe = tmp_home / ".local" / "bin" / "rtk.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    cli._remove_program(rtk, cli.Effects(run=FakeRun()))
+    assert not exe.exists()

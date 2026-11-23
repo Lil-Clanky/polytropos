@@ -25,16 +25,25 @@ def test_paths_follow_xdg(tmp_home, monkeypatch):
     assert paths.cache_dir() == Path("/z/polytropos")
     for name in ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"):
         monkeypatch.delenv(name)
+    monkeypatch.setattr(paths.sys, "platform", "linux")
     assert paths.data_dir() == Path.home() / ".local/share/polytropos"
     assert paths.state_dir() == Path.home() / ".local/state/polytropos"
     assert paths.cache_dir() == Path.home() / ".cache/polytropos"
+    monkeypatch.setattr(paths.sys, "platform", "win32")  # one folder under %LOCALAPPDATA%, like Hermes's own
+    local = tmp_home / "AppData" / "Local"
+    assert paths.data_dir() == paths.state_dir() == paths.cache_dir() == local / "polytropos"
+    monkeypatch.delenv("LOCALAPPDATA")
+    assert paths.data_dir() == Path.home() / "AppData" / "Local" / "polytropos"
 
 
 def test_hermes_home_env_and_default(tmp_home, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", "/h")
     assert paths.hermes_home() == Path("/h")
     monkeypatch.delenv("HERMES_HOME")
+    monkeypatch.setattr(paths.sys, "platform", "linux")
     assert paths.hermes_home() == Path.home() / ".hermes"
+    monkeypatch.setattr(paths.sys, "platform", "win32")  # hermes_constants.py: %LOCALAPPDATA%\hermes
+    assert paths.hermes_home() == tmp_home / "AppData" / "Local" / "hermes"
 
 
 def test_message_text_handles_parts():

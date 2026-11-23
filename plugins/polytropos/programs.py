@@ -5,9 +5,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -20,7 +22,9 @@ _VERSION = re.compile(r"\d+\.\d+\.\d+")
 # npm and uv run the scripts of the packages they install, so they get only what they need, not Hermes's provider keys.
 _ENV_NAMES = {"PATH", "HOME", "USER", "LOGNAME", "TERM", "LANG", "LANGUAGE", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY",
               "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
-              "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NVM_DIR", "VOLTA_HOME"}
+              "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NVM_DIR", "VOLTA_HOME",
+              # Windows: node does not start without SYSTEMROOT, and npm and uv find their folders through the rest.
+              "SYSTEMROOT", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"}
 _ENV_PREFIXES = ("LC_", "NPM_CONFIG_", "UV_", "XDG_", "ASDF_", "MISE_")
 _ASSET_KEYS = {
     ("darwin", "arm64"): "darwin-arm64",
@@ -28,6 +32,7 @@ _ASSET_KEYS = {
     ("linux", "x86_64"): "linux-x86_64",
     ("linux", "aarch64"): "linux-aarch64",
     ("linux", "arm64"): "linux-aarch64",
+    ("win32", "AMD64"): "windows-x86_64",
 }
 
 
@@ -48,6 +53,11 @@ def child_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k.upper() in _ENV_NAMES or k.upper().startswith(_ENV_PREFIXES)}
 
 
+def run_command(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run that also starts npm's .cmd files on Windows, which a bare name does not find there."""
+    return subprocess.run([shutil.which(cmd[0]) or cmd[0], *cmd[1:]], **kwargs)
+
+
 def load_lock(path: Path) -> dict:
     with open(path, "rb") as f:
         return tomllib.load(f)
@@ -58,7 +68,8 @@ def _rtk(lock: dict, platform: str, machine: str) -> Program:
     if key is None:
         raise ValueError(f"no rtk asset for platform {platform!r} and machine {machine!r}")
     asset = lock["rtk"]["assets"][key]
-    dest = str(Path.home() / ".local" / "bin" / "rtk")  # checked there too, so another rtk on PATH does not count
+    # checked there too, so another rtk on PATH does not count; uv puts its tools there on Windows as well
+    dest = str(Path.home() / ".local" / "bin" / ("rtk.exe" if platform == "win32" else "rtk"))
     return Program(
         "rtk", lock["rtk"]["version"], [dest, "--version"], [[dest, "init", "--agent", "hermes"]],
         asset_url=asset["url"], asset_sha256=asset["sha256"],
@@ -111,7 +122,7 @@ def programs(lock: dict, *, platform: str, machine: str) -> list[Program]:
     ]
 
 
-def installed_version(p: Program, run=subprocess.run) -> str | None:
+def installed_version(p: Program, run=run_command) -> str | None:
     try:
         r = run(p.version_cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):  # missing, or present but not runnable
@@ -127,7 +138,7 @@ def is_current(p: Program, version: str | None) -> bool:
     return version is not None if p.name == "ollama" else version == p.version
 
 
-def needs_install(p: Program, run=subprocess.run) -> bool:
+def needs_install(p: Program, run=run_command) -> bool:
     return not is_current(p, installed_version(p, run))
 
 
@@ -154,18 +165,24 @@ def _link(target: Path, link: Path) -> None:
 
 
 def _install_rtk(p: Program, download: Callable[[str, Path], None]) -> None:
-    bin_dir = Path.home() / ".local" / "bin"
+    dest = Path(p.version_cmd[0])  # ~/.local/bin/rtk, rtk.exe on Windows
     with tempfile.TemporaryDirectory() as tmp:
-        with tarfile.open(_fetch(p, download, tmp)) as tf:
-            member = next((m for m in tf.getmembers() if m.isfile() and Path(m.name).name == "rtk"), None)
-            if member is None:
-                raise ValueError(f"no rtk binary in {p.asset_url}")
-            data = tf.extractfile(member).read()
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        staged = bin_dir / ".rtk.new"
+        archive = _fetch(p, download, tmp)
+        if p.asset_url.endswith(".zip"):  # the Windows release
+            with zipfile.ZipFile(archive) as zf:
+                name = next((n for n in zf.namelist() if Path(n).name == dest.name), None)
+                data = zf.read(name) if name else None
+        else:
+            with tarfile.open(archive) as tf:
+                member = next((m for m in tf.getmembers() if m.isfile() and Path(m.name).name == dest.name), None)
+                data = tf.extractfile(member).read() if member else None
+        if data is None:
+            raise ValueError(f"no rtk binary in {p.asset_url}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        staged = dest.with_name(f".{dest.name}.new")
         staged.write_bytes(data)
         os.chmod(staged, 0o755)
-        os.replace(staged, bin_dir / "rtk")
+        os.replace(staged, dest)  # also on Windows: the file is replaced, never linked
 
 
 def _install_ollama_tree(p: Program, download: Callable[[str, Path], None]) -> None:
@@ -204,11 +221,15 @@ def _install_ollama_tree(p: Program, download: Callable[[str, Path], None]) -> N
 
 
 LINUX_OLLAMA = "curl -fsSL https://ollama.com/install.sh | sh"
+WINDOWS_OLLAMA = "irm https://ollama.com/install.ps1 | iex"
 
 
-def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], None] | None = None) -> None:
+def install(p: Program, run=run_command, *, download: Callable[[str, Path], None] | None = None) -> None:
     if p.name == "ollama" and not p.asset_url:
-        # Ollama's Linux script asks for sudo and has no checksum to pin, so it is left for the user to run.
+        # Ollama's install scripts have no checksum to pin, and the Linux one asks for sudo, so the user runs them.
+        if sys.platform == "win32":
+            raise ValueError(f"Polytropos does not install Ollama on Windows. Install it in PowerShell with: "
+                             f"{WINDOWS_OLLAMA}")
         raise ValueError(f"Polytropos does not install Ollama on Linux. Install it with: {LINUX_OLLAMA}")
     if p.asset_url:
         (_install_ollama_tree if p.name == "ollama" else _install_rtk)(p, download or _download)
@@ -231,7 +252,7 @@ def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], N
         run(cmd, check=True, env=env)
 
 
-def ponytail_fallback(lock: dict, run=subprocess.run) -> None:
+def ponytail_fallback(lock: dict, run=run_command) -> None:
     """Install ponytail at the lock's commit through Hermes's installer, which scans it and records the install."""
     pin = lock["plugins"]["ponytail"]
     run(["hermes", "plugins", "install", pin["repo"], "--ref", pin["commit"], "--enable"], check=True)

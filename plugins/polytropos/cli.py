@@ -56,7 +56,7 @@ def hermes_home() -> Path:
 class Effects:
     """Every external effect of a command, so tests can replace them."""
 
-    run: Callable = subprocess.run
+    run: Callable = programs.run_command
     ask: Callable[[str], str] = input
     http_get: Callable[[str, dict], tuple[int, bytes]] = _default_get
     download: Callable[[str, Path], None] | None = None
@@ -518,7 +518,7 @@ def _remove_program(p: programs.Program, fx: Effects) -> None:
     local = Path.home() / ".local"
     first = p.install_cmds[0] if p.install_cmds else []
     if p.asset_url:  # rtk and the macOS Ollama were unpacked into ~/.local
-        (local / "bin" / p.name).unlink(missing_ok=True)
+        (local / "bin" / Path(p.version_cmd[0]).name).unlink(missing_ok=True)  # rtk.exe on Windows
         shutil.rmtree(local / "lib" / "polytropos" / p.name, ignore_errors=True)
     elif first[:3] == ["uv", "tool", "install"]:
         spec = first[3]
@@ -650,7 +650,7 @@ def _loopback(url: str) -> bool:
         return False
 
 
-def run_canary(cfg: "RouterConfig", *, run=subprocess.run, models: list[str] | None = None) -> dict[str, str]:
+def run_canary(cfg: "RouterConfig", *, run=programs.run_command, models: list[str] | None = None) -> dict[str, str]:
     """Run stack-canary's tool checks once on each cloud model in the routes (or only those in models), store
     "<upstream>/<model>" -> pass or fail with the local results and return the new entries."""
     results = {}

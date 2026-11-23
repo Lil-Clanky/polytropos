@@ -3,7 +3,9 @@ import hashlib
 import io
 import os
 import subprocess
+import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,7 @@ def test_lock_parses():
         ("darwin", "x86_64", "darwin-x86_64"),
         ("linux", "x86_64", "linux-x86_64"),
         ("linux", "aarch64", "linux-aarch64"),
+        ("win32", "AMD64", "windows-x86_64"),  # what platform.machine() says on 64-bit Windows
     ],
 )
 def test_rtk_asset_per_platform(platform, machine, asset):
@@ -56,6 +59,8 @@ def test_rtk_asset_per_platform(platform, machine, asset):
 def test_unknown_platform_raises():
     with pytest.raises(ValueError):
         P.programs(LOCK, platform="plan9", machine="mips")
+    with pytest.raises(ValueError, match="platform 'win32' and machine 'ARM64'"):  # rtk has no Windows arm64 build
+        P.programs(LOCK, platform="win32", machine="ARM64")
 
 
 def test_default_and_optional_sets():
@@ -94,6 +99,8 @@ def test_missing_or_unrunnable_binary_is_none(error):
 def test_rtk_is_checked_where_polytropos_installs_it(tmp_home):
     rtk = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["rtk"]
     assert rtk.version_cmd == [str(tmp_home / ".local" / "bin" / "rtk"), "--version"]
+    rtk = by_name(P.programs(LOCK, platform="win32", machine="AMD64"))["rtk"]
+    assert rtk.version_cmd == [str(tmp_home / ".local" / "bin" / "rtk.exe"), "--version"]
 
 
 def test_stack_canary_is_current_only_at_the_commit_install_recorded(tmp_home):
@@ -128,7 +135,23 @@ def test_rtk_install_verifies_places_and_inits(tmp_home):
     P.install(rtk, lambda cmd, **k: calls.append(cmd) or proc(), download=lambda url, dest: dest.write_bytes(data))
     dest = tmp_home / ".local" / "bin" / "rtk"
     assert dest.read_bytes().startswith(b"#!/bin/sh")
-    assert dest.stat().st_mode & 0o777 == 0o755
+    assert sys.platform == "win32" or dest.stat().st_mode & 0o777 == 0o755  # Windows keeps no mode bits
+    assert calls == [[str(dest), "init", "--agent", "hermes"]]
+
+
+def test_windows_rtk_comes_out_of_the_zip_as_rtk_exe(tmp_home):
+    rtk = by_name(P.programs(LOCK, platform="win32", machine="AMD64"))["rtk"]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:  # the layout of rtk-x86_64-pc-windows-msvc.zip
+        zf.writestr("LICENSE", "license")
+        zf.writestr("rtk.exe", "MZ binary")
+    data = buf.getvalue()
+    rtk = dataclasses.replace(rtk, asset_sha256=hashlib.sha256(data).hexdigest())
+    calls = []
+    P.install(rtk, lambda cmd, **k: calls.append(cmd) or proc(), download=lambda url, dest: dest.write_bytes(data))
+    dest = tmp_home / ".local" / "bin" / "rtk.exe"
+    assert dest.read_bytes() == b"MZ binary" and not dest.is_symlink()
+    assert sorted(p.name for p in dest.parent.iterdir()) == ["rtk.exe"]
     assert calls == [[str(dest), "init", "--agent", "hermes"]]
 
 
@@ -176,12 +199,30 @@ def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch):
     for name in ("graphify", "opencode"):
         P.install(progs[name], run)
     for tool in ("uv", "npm", "npx"):
-        assert "OPENAI_API_KEY" not in envs[tool] and envs[tool]["PATH"] == os.environ["PATH"]
-        assert envs[tool]["npm_config_cache"] == "/tmp/npm-cache"
-        assert envs[tool]["https_proxy"] == "http://proxy.test:3128" and envs[tool]["ASDF_DATA_DIR"] == "/tmp/asdf"
+        env = {k.upper(): v for k, v in envs[tool].items()}  # Windows spells every name in capitals
+        assert "OPENAI_API_KEY" not in env and env["PATH"] == os.environ["PATH"]
+        assert env["NPM_CONFIG_CACHE"] == "/tmp/npm-cache"
+        assert env["HTTPS_PROXY"] == "http://proxy.test:3128" and env["ASDF_DATA_DIR"] == "/tmp/asdf"
     assert "FREELLMAPI_API_KEY" not in envs["npm"] and "FREELLMAPI_API_KEY" not in envs["uv"]
     assert envs["npx"]["FREELLMAPI_API_KEY"] == "sk-freellmapi-test-key"  # only FreeLLMAPI's setup-opencode gets it
     assert envs["hermes"] is None and envs["graphify"] is None  # these work on the profile with Hermes's environment
+
+
+def test_npm_and_uv_keep_the_windows_folders_and_shell(monkeypatch):
+    for name in ("SYSTEMROOT", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"):
+        monkeypatch.setenv(name, f"value of {name}")
+    env = {k.upper(): v for k, v in P.child_env().items()}
+    assert env["SYSTEMROOT"] == "value of SYSTEMROOT" and env["APPDATA"] == "value of APPDATA"  # node, npm's prefix
+    assert env["LOCALAPPDATA"] == "value of LOCALAPPDATA" and env["COMSPEC"] == "value of COMSPEC"  # caches, scripts
+
+
+def test_run_command_starts_what_which_finds(monkeypatch):
+    seen = []
+    monkeypatch.setattr(P.shutil, "which", lambda name: r"C:\nodejs\npm.CMD" if name == "npm" else None)
+    monkeypatch.setattr(P.subprocess, "run", lambda argv, **k: seen.append((argv, k)) or proc())
+    P.run_command(["npm", "install", "-g", "x"], check=True)
+    P.run_command(["missing", "--version"])  # not found: the name stays, so the error names it
+    assert seen == [([r"C:\nodejs\npm.CMD", "install", "-g", "x"], {"check": True}), (["missing", "--version"], {})]
 
 
 def test_context7_mcp_step_falls_back_to_manual(capsys):
@@ -227,6 +268,8 @@ def darwin_ollama(data=None):
     return dataclasses.replace(ol, asset_sha256=hashlib.sha256(data).hexdigest()) if data else ol
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the macOS Ollama install links files, which Windows allows "
+                                                    "only with a privilege")
 def test_macos_ollama_installs_lock_version_tree(tmp_home, capsys):
     data = tar_ollama()
     calls = []
@@ -256,9 +299,15 @@ def test_macos_ollama_unsafe_member_leaves_nothing(tmp_home):
     assert not (tmp_home / "evil").exists()
 
 
-def test_linux_ollama_is_left_to_the_user_and_runs_nothing():
-    ol = by_name(P.programs(LOCK, platform="linux", machine="x86_64"))["ollama"]
+@pytest.mark.parametrize("platform, machine, says", [
+    ("linux", "x86_64", "does not install Ollama on Linux. Install it with: curl -fsSL https://ollama.com/install.sh | sh"),
+    ("win32", "AMD64", "does not install Ollama on Windows. Install it in PowerShell with: "
+                       "irm https://ollama.com/install.ps1 | iex"),
+])
+def test_linux_and_windows_ollama_is_left_to_the_user_and_runs_nothing(monkeypatch, platform, machine, says):
+    monkeypatch.setattr(P.sys, "platform", platform)
+    ol = by_name(P.programs(LOCK, platform=platform, machine=machine))["ollama"]
     calls = []
-    with pytest.raises(ValueError, match="does not install Ollama on Linux"):
+    with pytest.raises(ValueError) as raised:
         P.install(ol, lambda cmd, **k: calls.append(cmd) or proc())
-    assert calls == []
+    assert says in str(raised.value) and calls == []
