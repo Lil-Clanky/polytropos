@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from ._shared import paths
+from .programs import child_env
 from .services import ServiceManager, ServiceSpec
 from .state import load_state
 
@@ -151,8 +152,8 @@ class FreeLLM:
 
     # --- build and install ---
 
-    def _step(self, argv: list[str], cwd: Path | None = None) -> str:
-        res = self.run(argv, capture_output=True, text=True, check=False, cwd=cwd)
+    def _step(self, argv: list[str], cwd: Path | None = None, env: dict | None = None) -> str:
+        res = self.run(argv, capture_output=True, text=True, check=False, cwd=cwd, env=env)
         if res.returncode != 0:
             tail = (res.stderr or res.stdout or "").strip()[-500:]
             raise BuildError(f"`{' '.join(argv)}` failed: {tail}")
@@ -176,8 +177,8 @@ class FreeLLM:
             elif server_data.exists():
                 shutil.rmtree(server_data)
             server_data.symlink_to(data)
-            self._step(["npm", "ci"], cwd=dest)
-            self._step(["npm", "run", "build"], cwd=dest)
+            self._step(["npm", "ci"], cwd=dest, env=child_env())
+            self._step(["npm", "run", "build"], cwd=dest, env=child_env())
         except (BuildError, OSError) as err:
             shutil.rmtree(dest, ignore_errors=True)
             raise err if isinstance(err, BuildError) else BuildError(str(err)) from err

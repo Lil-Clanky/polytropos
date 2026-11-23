@@ -165,6 +165,19 @@ def test_build_links_data(tmp_home):
     assert argvs[-2:] == [["npm", "ci"], ["npm", "run", "build"]]
 
 
+def test_npm_gets_no_provider_keys(tmp_home, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
+    run, envs = FakeRun(), {}
+
+    def recording(argv, **kw):
+        envs[" ".join(argv)] = kw.get("env")
+        return run(argv, **kw)
+
+    make(tmp_home, run=recording).build(NEW)
+    for step in ("npm ci", "npm run build"):
+        assert "OPENAI_API_KEY" not in envs[step] and envs[step]["HOME"] == str(tmp_home)
+
+
 def test_ensure_env_once(tmp_home):
     f = make(tmp_home)
     path = f.ensure_env()

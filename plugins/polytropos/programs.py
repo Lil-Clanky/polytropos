@@ -17,6 +17,10 @@ import tomllib
 from .state import load_state
 
 _VERSION = re.compile(r"\d+\.\d+\.\d+")
+# npm and uv run the scripts of the packages they install, so they get only what they need, not Hermes's provider keys.
+_ENV_NAMES = {"PATH", "HOME", "USER", "LOGNAME", "TERM", "LANG", "LANGUAGE", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY",
+              "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE"}
+_ENV_PREFIXES = ("LC_", "NPM_CONFIG_", "UV_", "XDG_")
 _ASSET_KEYS = {
     ("darwin", "arm64"): "darwin-arm64",
     ("darwin", "x86_64"): "darwin-x86_64",
@@ -36,6 +40,11 @@ class Program:
     # rtk only: the release archive to download and its expected SHA-256.
     asset_url: str = ""
     asset_sha256: str = ""
+
+
+def child_env() -> dict[str, str]:
+    """The environment for npm, npx and uv: paths, locale, proxies, CA certificates and their own settings."""
+    return {k: v for k, v in os.environ.items() if k.upper() in _ENV_NAMES or k.upper().startswith(_ENV_PREFIXES)}
 
 
 def load_lock(path: Path) -> dict:
@@ -212,7 +221,7 @@ def install(p: Program, run=subprocess.run, *, download: Callable[[str, Path], N
             if not ok:
                 print(f"The MCP server {cmd[3]} was not added. To add it, run: " + " ".join(cmd))
             continue
-        run(cmd, check=True)
+        run(cmd, check=True, env=child_env() if cmd[0] in ("npm", "npx", "uv") else None)
 
 
 def ponytail_fallback(lock: dict, run=subprocess.run, *, force: bool = False) -> None:

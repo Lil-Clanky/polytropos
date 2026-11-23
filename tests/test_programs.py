@@ -1,6 +1,7 @@
 import dataclasses
 import hashlib
 import io
+import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -157,6 +158,26 @@ def test_context7_mcp_step_gets_no_terminal_input():
     P.install(c7, lambda cmd, **k: calls.append((cmd, k)) or proc())
     [mcp] = [k for cmd, k in calls if cmd[:3] == ["hermes", "mcp", "add"]]
     assert mcp["stdin"] is subprocess.DEVNULL and mcp["capture_output"]  # an overwrite prompt fails at once
+
+
+def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
+    monkeypatch.setenv("npm_config_cache", "/tmp/npm-cache")
+    monkeypatch.setenv("https_proxy", "http://proxy.test:3128")
+    progs = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))
+    envs = {}
+
+    def run(cmd, **k):
+        envs.setdefault(cmd[0], k.get("env"))
+        return proc()
+
+    for name in ("graphify", "opencode"):
+        P.install(progs[name], run)
+    for tool in ("uv", "npm", "npx"):
+        assert "OPENAI_API_KEY" not in envs[tool] and envs[tool]["PATH"] == os.environ["PATH"]
+        assert envs[tool]["npm_config_cache"] == "/tmp/npm-cache"
+        assert envs[tool]["https_proxy"] == "http://proxy.test:3128"
+    assert envs["hermes"] is None and envs["graphify"] is None  # these work on the profile with Hermes's environment
 
 
 def test_context7_mcp_step_falls_back_to_manual(capsys):
