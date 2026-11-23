@@ -591,8 +591,9 @@ def test_uninstall_removes_programs_without_provider_keys(monkeypatch):
     assert all("OPENAI_API_KEY" not in env and env["PATH"] == os.environ["PATH"] for _, env in envs)
 
 
-def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home):
-    home = tmp_home / ".hermes"
+def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home, monkeypatch):
+    home = paths.default_hermes_home()  # where graphify writes; ~/.hermes, or %LOCALAPPDATA%\hermes on Windows
+    monkeypatch.setenv("HERMES_HOME", str(home))
     own_skill = home / "skills" / "software-development" / "ast-grep"  # the user's own, there before the install
     own_skill.mkdir(parents=True)
     (home / "config.yaml").write_text(yaml.safe_dump({"mcp_servers": {"mine": {"command": "my-mcp"}}}))
@@ -643,6 +644,24 @@ def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(t
     assert graphify.is_dir() and f"added {graphify}, which is outside this profile" in out
     assert "Run this command yourself: hermes skills uninstall qmd --yes" in out
     assert load_state().profiles[str(home)] == {"integrations": [qmd]}
+
+
+def test_rtk_works_on_this_profile_and_graphify_on_hermess_default_home(tmp_home, monkeypatch):
+    home = tmp_home / ".hermes" / "profiles" / "work"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    rtk = [str(tmp_home / ".local" / "bin" / "rtk"), "init", "--agent", "hermes"]
+    state = State()
+    state.profiles[str(home)] = {"integrations": [{"ran": rtk, "added": str(home / "plugins" / "rtk")}]}
+    save_state(state)
+    envs = []
+    run = lambda argv, **kw: envs.append(kw.get("env")) or SimpleNamespace(returncode=0)  # noqa: E731
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert envs[0]["HERMES_HOME"] == str(home)  # rtk falls back to ~/.hermes without it
+    graphify = ["graphify", "install", "--platform", "hermes"]  # graphify ignores HERMES_HOME
+    monkeypatch.setattr(cli.paths.sys, "platform", "win32")
+    assert cli._added_by(graphify, home) == tmp_home / "AppData" / "Local" / "hermes" / "skills" / "graphify"
+    monkeypatch.setattr(cli.paths.sys, "platform", "linux")
+    assert cli._added_by(graphify, home) == tmp_home / ".hermes" / "skills" / "graphify"
 
 
 def test_install_records_setup_opencode_when_it_changes_opencodes_config(tmp_home, monkeypatch):

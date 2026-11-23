@@ -224,7 +224,8 @@ LINUX_OLLAMA = "curl -fsSL https://ollama.com/install.sh | sh"
 WINDOWS_OLLAMA = "irm https://ollama.com/install.ps1 | iex"
 
 
-def install(p: Program, run=run_command, *, download: Callable[[str, Path], None] | None = None) -> None:
+def install(p: Program, run=run_command, *, download: Callable[[str, Path], None] | None = None,
+            hermes_home: Path | None = None) -> None:
     if p.name == "ollama" and not p.asset_url:
         # Ollama's install scripts have no checksum to pin, and the Linux one asks for sudo, so the user runs them.
         if sys.platform == "win32":
@@ -244,6 +245,8 @@ def install(p: Program, run=run_command, *, download: Callable[[str, Path], None
                 print(f"The MCP server {cmd[3]} was not added. To add it, run: " + " ".join(cmd))
             continue
         env = child_env() if cmd[0] in ("npm", "npx", "uv") else None
+        if cmd[1:] == ["init", "--agent", "hermes"] and hermes_home:  # rtk writes to $HERMES_HOME, else ~/.hermes
+            env = {**os.environ, "HERMES_HOME": str(hermes_home)}
         if cmd[-1] == "setup-opencode":
             from .freellm import api_key  # here, because freellm imports this module
 

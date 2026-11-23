@@ -139,6 +139,14 @@ def test_rtk_install_verifies_places_and_inits(tmp_home):
     assert calls == [[str(dest), "init", "--agent", "hermes"]]
 
 
+def test_rtk_init_gets_the_profiles_hermes_home(tmp_path):
+    rtk = dataclasses.replace(by_name(P.programs(LOCK, platform="win32", machine="AMD64"))["rtk"], asset_url="")
+    envs = []
+    P.install(rtk, lambda cmd, **k: envs.append(k["env"]) or proc(), hermes_home=tmp_path / "hermes")
+    P.install(rtk, lambda cmd, **k: envs.append(k["env"]) or proc())
+    assert envs[0]["HERMES_HOME"] == str(tmp_path / "hermes") and envs[1] is None  # rtk reads $HERMES_HOME
+
+
 def test_windows_rtk_comes_out_of_the_zip_as_rtk_exe(tmp_home):
     rtk = by_name(P.programs(LOCK, platform="win32", machine="AMD64"))["rtk"]
     buf = io.BytesIO()

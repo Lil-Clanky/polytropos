@@ -31,11 +31,13 @@ def cache_dir() -> Path:
     return _xdg("XDG_CACHE_HOME", ".cache")
 
 
-def hermes_home() -> Path:
-    if os.environ.get("HERMES_HOME"):
-        return Path(os.environ["HERMES_HOME"])
-    # Hermes's own default (hermes_constants.py): %LOCALAPPDATA%\hermes on Windows
+def default_hermes_home() -> Path:
+    """Hermes's own default (hermes_constants.py): %LOCALAPPDATA%\\hermes on Windows, ~/.hermes elsewhere."""
     return _local_appdata() / "hermes" if sys.platform == "win32" else Path.home() / ".hermes"
+
+
+def hermes_home() -> Path:
+    return Path(os.environ["HERMES_HOME"]) if os.environ.get("HERMES_HOME") else default_hermes_home()
 
 
 def freellmapi_port() -> int:

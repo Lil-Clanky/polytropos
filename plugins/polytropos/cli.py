@@ -137,10 +137,10 @@ def _value(value) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
-def _run(fx: Effects, command: list[str]) -> bool:
+def _run(fx: Effects, command: list[str], env: dict | None = None) -> bool:
     """Run a command and say whether it worked. A command that cannot start says why."""
     try:
-        return fx.run(command, check=False).returncode == 0
+        return fx.run(command, check=False, env=env).returncode == 0
     except OSError as err:
         print(f"{command[0]} could not run: {err}")
         return False
@@ -263,8 +263,8 @@ def _added_by(command: list[str], home: Path) -> Path | str | None:
         return f"mcp_servers.{command[3]}"
     if command[1:] == ["init", "--agent", "hermes"]:  # rtk's Hermes plugin
         return home / "plugins" / "rtk"
-    if command == ["graphify", "install", "--platform", "hermes"]:  # graphify ignores HERMES_HOME
-        return Path.home() / ".hermes" / "skills" / "graphify"
+    if command == ["graphify", "install", "--platform", "hermes"]:  # graphify ignores HERMES_HOME (install.py)
+        return paths.default_hermes_home() / "skills" / "graphify"
     if command[-1:] == ["setup-opencode"]:  # FreeLLMAPI's CLI merges its provider into OpenCode's config (tools.ts)
         config_home = os.environ.get("XDG_CONFIG_HOME", "").strip() or Path.home() / ".config"
         return Path(config_home) / "opencode" / "opencode.json"
@@ -298,7 +298,8 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
                if (target := _added_by(command, home)) is not None]
     existing = [c for c, t, old in touched if isinstance(t, str) and old is not None]  # Hermes would ask to overwrite
     # The program serves the whole machine and its integrations belong to each profile, so a profile that lacks one
-    # gets it. graphify's skill goes to ~/.hermes whatever the profile, so another profile does not run it again.
+    # gets it. graphify's skill goes to Hermes's default home whatever the profile, so another profile does not run
+    # it again.
     lacking = [c for c, t, old in touched
                if (old is None or old is False) and (isinstance(t, str) or t.is_relative_to(home))]
     # Update never adds an integration the profile lacks, so one the user removed stays removed.
@@ -308,11 +309,11 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
         before = programs.installed_version(p, fx.run)
         if programs.needs_install(p, fx.run):
             programs.install(replace(p, install_cmds=[c for c in p.install_cmds if c not in skipped]), fx.run,
-                             download=fx.download)
+                             download=fx.download, hermes_home=home)
             print(f"{p.name} {p.version} is installed.")
         elif lacking and add_integrations:
             step = "set up for this profile"
-            programs.install(replace(p, asset_url="", install_cmds=lacking), fx.run)
+            programs.install(replace(p, asset_url="", install_cmds=lacking), fx.run, hermes_home=home)
             print(f"{p.name} is set up for this profile.")
     except (subprocess.CalledProcessError, OSError, ValueError) as err:
         print(f"{p.name} was not {step}: {err}")
@@ -550,7 +551,7 @@ def _remove_program(p: programs.Program, fx: Effects) -> None:
 
 def _undo_integration(item: dict, home: Path, fx: Effects) -> bool:
     """Undo one recorded integration of this profile. False keeps the record, so the next uninstall tries again."""
-    ran, added = item["ran"], Path(item["added"])
+    ran, added, env = item["ran"], Path(item["added"]), None
     if ran[-1:] == ["setup-opencode"]:  # no safe undo: it merged its entries into the user's own OpenCode files
         data_home = os.environ.get("XDG_DATA_HOME", "").strip() or Path.home() / ".local" / "share"
         print(f"FreeLLMAPI's setup-opencode added the freellmapi provider to {added} and set a freellmapi model as "
@@ -562,14 +563,15 @@ def _undo_integration(item: dict, home: Path, fx: Effects) -> bool:
         command = ["hermes", "skills", "uninstall", added.name, "--yes"]
     elif ran[1:] == ["init", "--agent", "hermes"]:
         command = [*ran, "--uninstall"]  # rtk's own undo removes its Hermes plugin and its config entry
+        env = {**os.environ, "HERMES_HOME": str(home)}  # rtk works on $HERMES_HOME, else on ~/.hermes
     elif added.is_relative_to(home):
         shutil.rmtree(added, ignore_errors=True)
         return True
-    else:  # graphify writes to ~/.hermes whatever the profile, so the default profile may use this copy
+    else:  # graphify writes to the default home whatever the profile, so the default profile may use this copy
         print(f"{shlex.join(ran)} added {added}, which is outside this profile. "
               "Remove it yourself if no other profile uses it.")
         return True
-    if not (done := _run(fx, command)):
+    if not (done := _run(fx, command, env)):
         print(f"Undoing {shlex.join(ran)} failed. Run this command yourself: {shlex.join(command)}")
     return done
 
