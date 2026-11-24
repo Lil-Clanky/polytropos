@@ -370,11 +370,14 @@ def test_report_compares_chats_up_to_when_they_left_their_group():
     records = [rec(1, session="a"), rec(1, session="b", arm="ablation", level="none"),
                rec(1, session="c", arm="ablation", level="none"), rec(1, session="c", turn=2, arm=None),  # it ended
                rec(1, session="d", arm=None),  # a chat that started before the ablation, or ran across a restart
-               rec(1, session="e", arm="ablation", level="none", api_calls=0)]  # no request that Polymetis saw
+               rec(1, session="e", arm="ablation", level="none", api_calls=0),  # no request that Polymetis saw
+               rec(1, session="f", arm="ablation", platform="subagent", tokens_in=900, tokens_out=100)]  # a task
     out = report.render(records, now=NOW)
     rows = {line.split()[0]: line.split()[1:3] for line in out.splitlines()
-            if line.startswith(("  normal", "  ablation"))}
+            if line.startswith(("  normal", "  ablation")) and "subagents" not in line}
     assert rows == {"normal": ["1", "1"], "ablation": ["2", "2"]}
+    assert "  ablation          1 subagents, 1000 tokens each" in out
+    assert "  normal            0 subagents, 0 tokens each" in out
     assert "Left out: 1 turns without a request that Polymetis saw." in out
 
 

@@ -42,14 +42,14 @@ def _ablation(all_records, now: float) -> list[str]:
 def _compare(records) -> list[str]:
     if not any(r.get("arm") == "ablation" for r in records):
         return []
-    # only chats that started while the ablation ran, up to when they left their group, so both groups cover
-    # the same part of their chats; a turn without a request that Polymetis saw shows nothing it changed
+    # only sessions that started while the ablation ran, up to when they left their group; a turn without a
+    # request that Polymetis saw shows nothing the ablation changed, and a subagent's turn is a whole task
     grouped = [r for r in records if r.get("arm") in ("normal", "ablation")]
     unseen = sum(not r.get("api_calls") for r in grouped)
-    arms = defaultdict(list)
+    arms, subagents = defaultdict(list), defaultdict(list)
     for r in grouped:
         if r.get("api_calls"):
-            arms[r["arm"]].append(r)
+            (subagents if r.get("platform") == "subagent" else arms)[r["arm"]].append(r)
     lines = ["", "Ablation comparison (per turn unless noted):",
              f"  {'group':<10} {'sessions':>8} {'turns':>6} {'tool errors':>11} {'corrections':>11} "
              f"{'repeats':>7} {'failed':>6} {'tokens':>8}"]
@@ -62,6 +62,13 @@ def _compare(records) -> list[str]:
             f"{sum(bool(r.get('correction')) for r in rs) / n:>11.2f} {sum(bool(r.get('repeat')) for r in rs) / n:>7.2f} "
             f"{sum(r.get('outcome') == 'failed' for r in rs) / n:>6.2f} "
             f"{sum((r.get('tokens_in') or 0) + (r.get('tokens_out') or 0) for r in rs) / n:>8.0f}")
+    if subagents:
+        lines.append("  Subagents that delegate_task started, apart from the turns above:")
+        for name in ("normal", "ablation"):
+            rs = subagents.get(name, [])
+            n = len({r.get("session") for r in rs})
+            tokens = sum((r.get("tokens_in") or 0) + (r.get("tokens_out") or 0) for r in rs)
+            lines.append(f"  {name:<10} {n:>8} subagents, {tokens / (n or 1):.0f} tokens each")
     if unseen:
         lines.append(f"  Left out: {unseen} turns without a request that Polymetis saw.")
     lines.append("  Few sessions give noisy numbers; compare again after a full week.")

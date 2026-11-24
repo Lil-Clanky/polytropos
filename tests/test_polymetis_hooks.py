@@ -177,6 +177,28 @@ def test_a_subagent_takes_its_parents_group(pm, tmp_path):
         hooks.on_session_end(session_id=sub, completed=True)
     assert [(r["arm"], r["level_reason"]) for r in records(tmp_path)][:2] == [("ablation", "ablation")] * 2
     assert records(tmp_path)[2]["arm"] is None
+    pm["ablation.until"] = "2020-01-01"  # the ablation ended before the parent's next turn
+    hooks.on_pre_llm_call(session_id="late", turn_id="t", user_message="Merge it", platform="cli", model="m",
+                          is_first_turn=True, parent_session_id=parent)
+    hooks.on_session_end(session_id="late", completed=True)
+    assert records(tmp_path)[3]["arm"] is None
+
+
+def test_a_session_keeps_its_group_when_a_compression_gives_it_a_new_id(pm, tmp_path):
+    pm["ablation.share"] = 1.0
+    start("Please merge my pull request")
+    hooks.on_post_compaction(session_id="s1", old_session_id="")  # compacted in place: nothing moves
+    hooks.on_post_compaction(session_id="s2", old_session_id="s1", kind="auto", reason="threshold")
+    request = {"model": "m", "messages": messages("hi"), "tools": TOOLS}
+    out = hooks.on_llm_request(request=request, session_id="s2", turn_id="t")  # the rest of the turn
+    assert out is not None and "skill_view" not in str(out["request"])
+    hooks.on_session_end(session_id="s2", turn_id="t", completed=True)
+    hooks.on_pre_llm_call(session_id="s2", turn_id="t2", user_message="And the other one", platform="cli",
+                          model="m", is_first_turn=False)
+    hooks.on_session_end(session_id="s2", turn_id="t2", completed=True)
+    first, second = records(tmp_path)
+    assert (first["arm"], second["arm"], second["turn"], second["session"]) == ("ablation", "ablation", 2,
+                                                                                 first["session"])
 
 
 def test_an_ablation_set_while_hermes_runs_waits_for_a_restart(pm, tmp_path, monkeypatch, caplog):

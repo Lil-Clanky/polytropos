@@ -175,7 +175,7 @@ def on_pre_llm_call(session_id: str = "", turn_id: str = "", user_message: Any =
         if session is None:
             if parent_session_id:  # a subagent that delegate_task started: its parent's group, if Polymetis knows it
                 parent = STORE.get(parent_session_id)
-                arm = parent.arm if parent is not None else None
+                arm = parent.arm if parent is not None and s.ablation_active() else None
             else:  # only a new chat gets a group: one that Polymetis first sees later may have used its skills
                 arm = decide.arm(s, session_id) if ablation_ready and is_first_turn else None
             session = STORE.add(session_id, Session(key=decide.session_key(session_id), platform=platform or "",
@@ -299,6 +299,18 @@ def on_session_end(session_id: str = "", turn_id: str = "", completed: Any = Non
         record = _record(session, turn, _settings, outcome)
     if _settings.log:
         log.write(log_path(), record)
+
+
+@_safe
+def on_post_compaction(session_id: str = "", old_session_id: str = "", **kwargs) -> None:
+    """A compression can move the conversation to a new session id, also in the middle of a turn. Polymetis
+    follows it there, so the session keeps its level, its group and the turn in progress."""
+    if not session_id or not old_session_id:  # compacted in place
+        return
+    with STORE.lock:
+        session = STORE.get(old_session_id)
+        if session is not None and STORE.get(session_id) is None:
+            STORE.add(session_id, session)
 
 
 @_safe

@@ -40,6 +40,8 @@ anywhere, and it starts in a shadow mode that only measures.
   (`model_tools.py:708-722`). A `skill_view` call names the skill in `args.name`.
 - `on_session_end` runs at the end of every `run_conversation`, that is after every turn, with
   `completed`, `failed`, `interrupted` and `turn_exit_reason` (`agent/turn_finalizer.py:912-925`).
+- `post_compaction` fires once per committed compaction, with `old_session_id` set when the
+  compression moved the conversation to a new session id (`agent/compaction_events.py:253-260`).
 - `llm_request` middleware may replace the provider kwargs and fails open
   (`website/docs/developer-guide/middleware.md`). Hermes still validates tool calls against the
   session's full tool list, so hiding a tool steers the model and does not secure anything.
@@ -119,15 +121,16 @@ loads it, and an ended one gives its sessions their skills back from the next tu
 
 Only a session that starts while the ablation runs, with no history yet, gets a group, `ablation` or
 `normal`, which the log records as `arm`; a subagent that `delegate_task` starts gets its parent's
-group. A session leaves its group when the ablation ends or when Polymetis loses track of it: after a
-restart, after a compression that gives it a new session id, or when it falls out of the 256 sessions
-Polymetis keeps. The report compares both groups up to that point and leaves out turns without a
-request that Polymetis saw. Counting a session first seen later, or a whole session that changed
-group, would bias the comparison: such sessions are long ones, and they would fall into one group
-only. One bias is left: a session with its skills reaches a compression sooner, so the normal group
-can lose its late turns earlier, and the comparison may understate what leaving skills out saves.
-The report proposes an ablation when a model it has not seen before shows up in the log, or 90 days
-after the last one.
+group, if Polymetis knows the parent. A compression that gives a session a new id does not end its
+group: Polymetis follows it through Hermes's `post_compaction` hook. A session leaves its group when
+the ablation ends or when Polymetis loses track of it: after a restart, or when it falls out of the
+256 sessions Polymetis keeps. The report compares both groups up to that point, leaves out turns
+without a request that Polymetis saw, and shows subagents apart, because each of their turns is a
+whole task. Counting a session first seen later, or a whole session that changed group, would bias
+the comparison: such sessions are long ones, and they would fall into one group only. A session with
+its skills also reaches a compression sooner, so cutting sessions there would bias it too. The report
+proposes an ablation when a model it has not seen before shows up in the log, or 90 days after the
+last one.
 
 ## Log
 
