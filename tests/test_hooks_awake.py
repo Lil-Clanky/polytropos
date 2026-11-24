@@ -1,5 +1,7 @@
+import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -96,14 +98,27 @@ def test_double_acquire_single_release_and_stray_release():
 
 
 def test_commands_and_max_hold():
-    mac, lin, other = FakePopen(), FakePopen(), FakePopen()
+    mac, lin, win, other = FakePopen(), FakePopen(), FakePopen(), FakePopen()
     awake.AwakeHolder(platform="darwin", popen=mac, max_hold_s=60).acquire("a")
     awake.AwakeHolder(platform="linux", popen=lin).acquire("a")
-    awake.AwakeHolder(platform="win32", popen=other).acquire("a")
+    awake.AwakeHolder(platform="win32", popen=win, max_hold_s=60).acquire("a")
+    awake.AwakeHolder(platform="plan9", popen=other).acquire("a")
     assert mac.procs[0].argv == ["caffeinate", "-i", "-t", "60"]
     assert lin.procs[0].argv == ["systemd-inhibit", "--what=idle:sleep", "--who=polytropos",
                                  "--why=Hermes turn", "sleep", "7200"]
+    assert win.procs[0].argv == [sys.executable, "-I", "-c", "import ctypes, time; "
+                                 "ctypes.windll.kernel32.SetThreadExecutionState(0x80000001); time.sleep(60)"]
     assert other.procs == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the hold calls the Windows API")
+def test_windows_hold_runs_until_its_time_is_up_and_ignores_the_working_folder(tmp_path, monkeypatch):
+    (tmp_path / "ctypes.py").write_text("open('planted', 'w').close()\n")  # what -c would import from here
+    monkeypatch.chdir(tmp_path)
+    holder = awake.AwakeHolder(max_hold_s=0)
+    holder.acquire("a")
+    assert holder._proc.wait(30) == 0  # the child Python ran SetThreadExecutionState without an error
+    assert not (tmp_path / "planted").exists()
 
 
 def test_missing_program_holds_nothing_and_logs_once(caplog):
@@ -201,10 +216,20 @@ def test_missing_config_is_unknown(env):
     assert turn() is None
 
 
+def test_config_comes_from_the_active_profile(env, tmp_home, monkeypatch):
+    profile = tmp_home / ".hermes" / "profiles" / "work"
+    profile.mkdir(parents=True)
+    (profile / "config.yaml").write_text(
+        f"model:\n  default: llama3.2:3b\n  provider: llama-cpp\n  base_url: {LLAMA}\n")
+    # In a gateway that serves several profiles, Hermes names the turn's profile here and not in HERMES_HOME.
+    monkeypatch.setitem(sys.modules, "hermes_constants", SimpleNamespace(get_hermes_home=lambda: profile))
+    assert turn()["action"] == "block"
+
+
 def test_non_loopback_and_default_ports():
     assert not hooks._is_local("https://api.example.com/v1")
-    assert not hooks._is_local("http://127.0.0.1:3001/v1")
-    assert not hooks._is_local("http://localhost:3001")
+    assert not hooks._is_local(f"http://127.0.0.1:{hooks.ROUTER_PORT}/v1")  # FreeLLMAPI
+    assert not hooks._is_local(f"http://localhost:{hooks.ROUTER_PORT}")
     assert not hooks._is_local("http://127.0.0.1:99999/v1")
     assert not hooks._is_local(None)
     assert hooks._is_local("http://localhost:11434")

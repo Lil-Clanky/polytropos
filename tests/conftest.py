@@ -24,6 +24,8 @@ def fake_openai():
 @pytest.fixture
 def tmp_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))  # Windows default of Hermes and Polytropos
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / ".local" / "share"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / ".local" / "state"))

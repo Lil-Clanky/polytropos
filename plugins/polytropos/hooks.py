@@ -10,8 +10,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ._shared import bridge, guard
-from ._shared.paths import hermes_home
 from .awake import AwakeHolder
+from .cli import hermes_home
+from .freellm import PORT
 
 try:
     from hermes_yaml import safe_load
@@ -23,7 +24,7 @@ log = logging.getLogger(__name__)
 BLOCK_TEXT = ("Polytropos paused this turn because {reason}. A local model can freeze this machine "
               "at this level. Switch to a cloud model with /model, or wait and try again.")
 ROUTER = "polytropos-router"
-ROUTER_PORT = 3001
+ROUTER_PORT = PORT  # FreeLLMAPI: loopback, but its models are in the cloud (31415 on Windows)
 MAX_RECORDS = 256
 
 
@@ -59,7 +60,6 @@ def _is_local(base_url) -> bool:
 
 
 def _config_provider(model) -> tuple[Any, Any]:
-    # shortcut: HERMES_HOME is the launch profile's; a gateway serving several profiles may read the wrong file
     try:
         section = safe_load((hermes_home() / "config.yaml").read_text()).get("model")
         if isinstance(section, dict) and section.get("default") == model:

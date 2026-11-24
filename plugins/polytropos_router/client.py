@@ -5,6 +5,7 @@ import functools
 import logging
 import os
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -119,6 +120,8 @@ def _abort(client: Any) -> None:
         if sock is not None:
             with contextlib.suppress(OSError):  # already closed
                 sock.shutdown(socket.SHUT_RDWR)
+                if sys.platform == "win32":  # there shutdown() does not wake a blocked read; closesocket() cancels it
+                    sock.close()
 
 
 class RouterClient:

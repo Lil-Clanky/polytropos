@@ -1,6 +1,7 @@
 import builtins
 import json
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -92,17 +93,16 @@ def test_plugins_match_records_by_source(ctx):
     assert [r.status for r in got] == ["fail"] * 3 and "not installed" in got[1].label
 
 
-def test_plugins_cloned_without_the_installer_are_checked_by_their_git_head(ctx):
+def test_ponytail_without_an_install_record_is_no_failure(ctx):
     pin = LOCK["plugins"]["ponytail"]
-    folder = ctx.hermes_home / "plugins" / "ponytail"
-    (folder / ".git").mkdir(parents=True)
     ctx.pack = {"plugins": [{"repo": pin["repo"], "ref": pin["commit"], "name": "ponytail"}]}
-    calls, heads = [], iter([pin["commit"] + "\n", "c" * 40 + "\n"])
-    ctx.run = lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0, stdout=next(heads), stderr="")
-    assert only(d.check_plugins(ctx)).label == "plugins: ponytail"
+    ctx.run = lambda argv, **kw: pytest.fail(f"unexpected command: {argv}")
     r = only(d.check_plugins(ctx))
-    assert r.status == "warn" and "ponytail is at ccccccc" in r.label
-    assert calls[0] == ["git", "-C", str(folder), "rev-parse", "HEAD"]
+    assert r.status == "warn" and r.label == "plugin DietrichGebert/ponytail is not installed"
+    assert r.fix == "hermes polytropos install --only ponytail"
+    (ctx.hermes_home / "plugins" / "ponytail" / ".git").mkdir(parents=True)  # as Polytropos 0.1.1 cloned it
+    r = only(d.check_plugins(ctx))
+    assert r.status == "info" and r.label == "plugin ponytail was installed without Hermes's installer"
 
 
 def test_freellmapi_not_running(ctx):
@@ -114,7 +114,7 @@ def test_freellmapi_not_running(ctx):
 def test_freellmapi_port_taken_by_another_program(ctx):
     ctx.http_get = lambda url, headers: (200, b"<html>hello</html>")
     r = only(d.check_freellmapi(ctx))
-    assert r.status == "fail" and "3001" in r.label and "not FreeLLMAPI" in r.label
+    assert r.status == "fail" and str(d.PORT) in r.label and "not FreeLLMAPI" in r.label
 
 
 def freellmapi_with_key(key, seen):
@@ -134,21 +134,23 @@ def test_freellmapi_health_uses_this_profiles_key(ctx, monkeypatch):
     monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-another-key")
     refused = only(d.check_freellmapi(ctx))
     assert refused.status == "warn" and refused.label == "FreeLLMAPI does not accept this profile's FREELLMAPI_API_KEY"
-    assert no_key.fix == refused.fix == "hermes polytropos setup"
+    assert no_key.fix == refused.fix == "hermes config set FREELLMAPI_API_KEY <key>"
     monkeypatch.setenv("FREELLMAPI_API_KEY", key)
     state = State()
     set_mode(state, "freellmapi", "external")
     save_state(state)
     ok = only(d.check_freellmapi(ctx))
-    assert ok.status == "ok" and ok.label == "FreeLLMAPI, external, 127.0.0.1:3001"  # Polytropos knows no tag for it
+    assert ok.status == "ok" and ok.label == f"FreeLLMAPI, external, 127.0.0.1:{d.PORT}"  # Polytropos knows no tag for it
     assert {"Authorization": f"Bearer {key}"} in seen
     assert key not in d.format_report([no_key, refused, ok]) and "sk-another-key" not in d.format_report([refused])
+    if sys.platform == "win32":  # a managed release is a link, and Polytropos runs FreeLLMAPI on macOS and Linux only
+        return
     set_mode(state, "freellmapi", "managed")
     save_state(state)
     root = ctx.home / ".local" / "share" / "polytropos" / "freellmapi"
     (root / "releases" / "v0.16.30").mkdir(parents=True)
     (root / "current").symlink_to(root / "releases" / "v0.16.30")
-    assert only(d.check_freellmapi(ctx)).label == "FreeLLMAPI v0.16.30, managed, 127.0.0.1:3001"  # the running tag
+    assert only(d.check_freellmapi(ctx)).label == f"FreeLLMAPI v0.16.30, managed, 127.0.0.1:{d.PORT}"  # the running tag
 
 
 @pytest.mark.parametrize("status, detail", [(0, "FreeLLMAPI did not answer"), (-1, "FreeLLMAPI did not answer"),
@@ -183,6 +185,8 @@ def test_node_outside_freellmapis_range_fails_unless_freellmapi_is_external(ctx)
     save_state(state)
     r = only(d.check_node(ctx))
     assert r.status == "fail" and "not found" in r.label
+    ctx.platform = "win32"  # FreeLLMAPI's desktop app needs no Node
+    assert only(d.check_node(ctx)).status == "info"
 
 
 ROUTER = """
@@ -348,7 +352,8 @@ def test_key_files_report_names_and_modes_without_opening(ctx, monkeypatch):
     monkeypatch.setattr(Path, "read_text", no_read)
     got = d.check_key_files(ctx)
     assert [r.status for r in got] == ["warn", "warn"]
-    assert "my-keys.json (0644)" in got[0].detail and "contents not opened" in got[0].label
+    mode = f"{bad.stat().st_mode & 0o777:04o}"  # 0644, or 0666 on Windows, which keeps no mode bits
+    assert f"my-keys.json ({mode})" in got[0].detail and "contents not opened" in got[0].label
     assert ".env.backup2" in got[1].detail and "secret" not in got[0].detail
 
 

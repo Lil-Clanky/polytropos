@@ -16,6 +16,8 @@ cli_version = "0.8.2"
 # release's checksums.txt and the asset digests of `gh release view -R rtk-ai/rtk`; the
 # darwin-arm64 archive was also downloaded and hashed (same value).
 # The release has no x86_64 linux gnu build, so both linux entries use the static musl builds.
+# The windows-x86_64 zip holds rtk.exe; it was downloaded and hashed, and the value matches
+# checksums.txt. The release has no Windows arm64 build.
 [rtk]
 version = "1.2.1"
 repo = "https://github.com/rtk-ai/rtk"
@@ -35,6 +37,10 @@ sha256 = "75f64525711be935657a6b228d929c24bd9d1ab7d640ea374a8b913e5b5bac05"
 [rtk.assets.linux-aarch64]
 url = "https://github.com/rtk-ai/rtk/releases/download/v1.2.1/rtk-aarch64-unknown-linux-musl.tar.gz"
 sha256 = "cae1a911eda9e898dbb90039436e9d53922b20afb1e3e4ae341f749eb62b7781"
+
+[rtk.assets.windows-x86_64]
+url = "https://github.com/rtk-ai/rtk/releases/download/v1.2.1/rtk-x86_64-pc-windows-msvc.zip"
+sha256 = "08671cb746e779c50dc530eec0114a7cd6cbbd1ea4f66c98dd9f0572f5f96c43"
 
 # graphify, license MIT (PyPI package graphifyy). Version from https://pypi.org/pypi/graphifyy/json.
 [graphify]

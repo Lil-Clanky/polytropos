@@ -31,6 +31,9 @@ class Limits:
     min_free_disk_bytes: int = 5 * 1024**3
     # Untuned starting value for Linux PSI.
     psi_some_avg10: float = 10.0
+    # Untuned starting values for Windows: the percentage of RAM in use (MEMORYSTATUSEX.dwMemoryLoad).
+    load_warning_pct: int = 90
+    load_critical_pct: int = 95
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,30 @@ def _linux_swap(read_text) -> int | None:
     return (total - free) * 1024 if total is not None and free is not None else None
 
 
+def _memory_status() -> tuple[int, int] | None:
+    """Windows: the percentage of RAM in use and the total RAM in bytes, from GlobalMemoryStatusEx."""
+    import ctypes
+
+    class MemoryStatusEx(ctypes.Structure):  # MEMORYSTATUSEX; the six fields after ullTotalPhys are not read
+        _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
+                    ("ullTotalPhys", ctypes.c_uint64), ("rest", ctypes.c_uint64 * 6)]
+
+    status = MemoryStatusEx(dwLength=ctypes.sizeof(MemoryStatusEx))
+    try:
+        ok = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+    except (AttributeError, OSError):  # not Windows
+        return None
+    return (status.dwMemoryLoad, status.ullTotalPhys) if ok else None
+
+
+def _windows_pressure(memory_status, limits: Limits) -> str:
+    status = memory_status()
+    if status is None:
+        return "unknown"
+    load = status[0]
+    return "critical" if load >= limits.load_critical_pct else "warning" if load >= limits.load_warning_pct else "normal"
+
+
 def _free_disk(disk_path: Path | None) -> int | None:
     if disk_path is None:
         models = Path.home() / ".ollama" / "models"
@@ -102,11 +129,13 @@ def _free_disk(disk_path: Path | None) -> int | None:
 
 
 def read_signals(*, platform: str = sys.platform, run=subprocess.run, read_text=_read_file,
-                 disk_path: Path | None = None, limits: Limits = Limits()) -> Signals:
+                 memory_status=_memory_status, disk_path: Path | None = None, limits: Limits = Limits()) -> Signals:
     if platform == "darwin":
         pressure, swap = _mac_pressure(run), _mac_swap(run)
     elif platform.startswith("linux"):
         pressure, swap = _linux_pressure(read_text, limits), _linux_swap(read_text)
+    elif platform == "win32":
+        pressure, swap = _windows_pressure(memory_status, limits), None  # GlobalMemoryStatusEx has no swap use
     else:
         pressure, swap = "unknown", None
     return Signals(pressure, swap, _free_disk(disk_path))
@@ -186,12 +215,16 @@ def fits(model_bytes: int, kv_bytes: int, total_ram_bytes: int, loaded_bytes: in
     return model_bytes + kv_bytes + loaded_bytes + reserve_bytes <= total_ram_bytes
 
 
-def total_ram_bytes(*, platform: str = sys.platform, run=subprocess.run, read_text=_read_file) -> int | None:
+def total_ram_bytes(*, platform: str = sys.platform, run=subprocess.run, read_text=_read_file,
+                    memory_status=_memory_status) -> int | None:
     if platform == "darwin":
         try:
             return int(_sysctl(run, "hw.memsize") or "")
         except ValueError:
             return None
+    if platform == "win32":
+        status = memory_status()
+        return status[1] if status else None
     kb = _meminfo_kb(read_text, "MemTotal")
     return kb * 1024 if kb is not None else None
 

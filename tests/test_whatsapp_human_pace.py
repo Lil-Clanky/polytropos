@@ -92,5 +92,6 @@ def test_pending_file_is_written_whole_and_private(pace, monkeypatch):
     pace._save()
     path = pace._state_file()
     assert pace.json.loads(path.read_text()) == {"whatsapp|chat": {"due": 5.0, "texts": ["held text"]}}
-    assert path.stat().st_mode & 0o777 == 0o600  # held texts are private messages
+    # held texts are private messages; Windows keeps no mode bits
+    assert sys.platform == "win32" or path.stat().st_mode & 0o777 == 0o600
     assert [p.name for p in path.parent.iterdir()] == ["pending.json"]  # no temp file left behind

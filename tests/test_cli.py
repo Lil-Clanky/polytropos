@@ -14,7 +14,7 @@ import yaml
 import polytropos
 from polytropos import cli, doctor, hooks, slash
 from polytropos._shared import guard, paths
-from polytropos.freellm import BuildError, Detected, Pin, PortBusy, UpdateResult
+from polytropos.freellm import DESKTOP_PORT, PORT, BuildError, Detected, Pin, PortBusy, UpdateResult
 from polytropos.programs import load_lock
 from polytropos.state import State, config_changes, load_state, record_config_change, save_state, set_mode, use_shared
 
@@ -23,6 +23,8 @@ LOCK = load_lock(ROOT / "versions.lock")
 R = "plugins.entries.polytropos-router."
 SHA_OLD, SHA_NEW = "a" * 40, "b" * 40
 GB = 1024**3
+# Polytropos builds FreeLLMAPI, links its releases and runs it as a service only on macOS and Linux.
+managed = pytest.mark.skipif(sys.platform == "win32", reason="Polytropos does not run FreeLLMAPI on Windows")
 
 
 def parse(*argv):
@@ -41,9 +43,8 @@ def probe(argv):
 
 
 class FakeRun:
-    """Records argv. A probe prints versions[name] (the name without its folder) or raises FileNotFoundError.
-    A command that starts with a prefix in `fail` exits 1; `on` maps a prefix to a side effect. As in Hermes v0.23.2
-    (hermes_cli/config_section_guard.py), setting the bare model key without --force exits 1 over a mapping."""
+    """Records argv. A probe prints versions[name] (the name without its folder and .exe) or raises FileNotFoundError.
+    A command that starts with a prefix in `fail` exits 1; `on` maps a prefix to a side effect."""
 
     def __init__(self, versions=None, fail=(), on=None):
         self.versions, self.fail, self.on, self.calls = versions or {}, fail, on or {}, []
@@ -52,16 +53,14 @@ class FakeRun:
         argv = [str(a) for a in argv]
         self.calls.append(argv)
         if probe(argv):
-            name = Path(argv[0]).name
+            name = Path(argv[0]).name.removesuffix(".exe")
             if name not in self.versions:
                 raise FileNotFoundError(argv[0])
             return SimpleNamespace(returncode=0, stdout=f"{name} {self.versions[name]}\n", stderr="")
         for prefix, effect in self.on.items():
             if argv[:len(prefix)] == list(prefix):
                 effect(argv)
-        guarded = argv[:4] == ["hermes", "config", "set", "model"] and isinstance(
-            cli._read_config(Path(os.environ["HERMES_HOME"])).get("model"), dict)  # never the real ~/.hermes
-        code = 1 if guarded or any(argv[:len(p)] == list(p) for p in self.fail) else 0
+        code = 1 if any(argv[:len(p)] == list(p) for p in self.fail) else 0
         if code and kw.get("check"):
             raise subprocess.CalledProcessError(code, argv)
         return SimpleNamespace(returncode=code, stdout="", stderr="")
@@ -172,7 +171,7 @@ def test_doctor_offers_the_router_as_default_model_after_a_clean_run(tmp_home, m
     monkeypatch.delenv("FREELLMAPI_API_KEY")  # without this profile's key the router could not answer
     assert cli.handle(parse("doctor"), cli.Effects(run=run, ask=no_questions)) == 0
     assert run.commands() == []
-    assert "To make the Polytropos router the default model, run: hermes polytropos setup" in capsys.readouterr().out
+    assert "with: hermes config set FREELLMAPI_API_KEY <key>" in capsys.readouterr().out
 
 
 def test_router_default_removes_model_context_length_and_uninstall_restores_it(tmp_home, monkeypatch):
@@ -224,6 +223,7 @@ def test_doctor_checks_plugins_in_an_installed_home_without_a_pack_file(tmp_home
 
 # --- install ---
 
+@managed
 def test_install_refuses_when_another_program_holds_port_3001(tmp_home, capsys):
     run = FakeRun()
     fx = cli.Effects(run=run, http_get=lambda url, headers: (200, b"<html>not an API</html>"), ask=no_questions)
@@ -265,6 +265,7 @@ class FakeInstallFreeLLM:
     (True, BuildError("FreeLLMAPI did not answer on port 3001 within 60 s"), True),
     (False, BuildError("`npm ci` failed"), False),
 ])
+@managed
 def test_install_records_managed_mode_once_the_service_exists(tmp_home, writes_service, error, recorded):
     fl = FakeInstallFreeLLM(tmp_home / "service.plist", writes_service, error)
     fx = cli.Effects(run=FakeRun(), ask=no_questions, freellm=fl)
@@ -280,7 +281,29 @@ def test_install_rejects_unknown_names(tmp_home, capsys):
     assert "nope" in capsys.readouterr().out and run.calls == []
 
 
-def test_adopt_reads_the_checkout_from_from_path(tmp_home, capsys):
+def test_install_on_windows_points_at_the_desktop_app_and_builds_nothing(tmp_home, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(cli.platform, "machine", lambda: "AMD64")
+    run = FakeRun()
+    fx = cli.Effects(run=run, http_get=lambda url, headers: pytest.fail("FreeLLMAPI probed"), ask=no_questions,
+                     freellm=SimpleNamespace())  # any call on it fails the test
+    assert cli.handle(parse("install", "--only", "freellmapi"), fx) == 0
+    entry = load_state().shared["freellmapi"]
+    assert entry["mode"] == "external" and entry["installed_by_us"] is False and run.calls == []
+    out = capsys.readouterr().out
+    assert "https://apps.microsoft.com/detail/9PBN6G8K2B7F" in out and f"127.0.0.1:{DESKTOP_PORT}" in out
+    assert "the Keys page shows the unified API key" in out and "Next, run hermes polytropos setup." in out
+
+
+def test_adopt_on_windows_changes_nothing(tmp_home, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    fx = cli.Effects(run=FakeRun(), ask=no_questions, freellm=SimpleNamespace())
+    assert cli.handle(parse("adopt", "--from", str(tmp_home / "checkout")), fx) == 1
+    assert "desktop app" in capsys.readouterr().out and load_state().shared == {}
+
+
+def test_adopt_reads_the_checkout_from_from_path(tmp_home, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "linux")
     checkout = tmp_home / "checkout"
     args = parse("adopt", "--from", str(checkout))
     assert args.from_path == checkout and not hasattr(args, "source")  # Hermes's own --source has that destination
@@ -309,7 +332,7 @@ def test_adopt_says_how_to_stop_the_old_freellmapi_and_stops_nothing(tmp_home, m
 
 
 def test_a_failed_integration_step_says_the_program_was_not_set_up_for_this_profile(tmp_home, capsys):
-    rtk = str(tmp_home / ".local" / "bin" / "rtk")
+    rtk = cli._programs(LOCK)[0].version_cmd[0]  # ~/.local/bin/rtk, rtk.exe on Windows
     run = FakeRun(versions={"rtk": LOCK["rtk"]["version"]}, fail=[(rtk, "init")])
     assert cli.handle(parse("install", "--only", "rtk"), cli.Effects(run=run, ask=no_questions)) == 1
     out = capsys.readouterr().out
@@ -350,7 +373,7 @@ class FakeFreeLLM:
 
 def default_integrations(home):
     """What rtk, graphify and ast-grep add to the default profile, so install and update find nothing missing."""
-    for folder in ("plugins/rtk", "skills/graphify", "skills/software-development/ast-grep"):
+    for folder in ("plugins/rtk-rewrite", "skills/graphify", "skills/software-development/ast-grep"):
         (home / folder).mkdir(parents=True, exist_ok=True)
 
 
@@ -372,9 +395,10 @@ def test_update_moves_ponytail_programs_and_freellmapi_to_the_installed_pins(tmp
     assert cli.handle(parse("update"), fx) == 0
     assert asked[0] == "Update ponytail, the programs and FreeLLMAPI to the versions Polytropos pins? [y/N] "
     cmds = run.commands()
-    assert ["git", "clone", LOCK["plugins"]["ponytail"]["repo"], str(home / "plugins" / "ponytail")] in cmds
+    ponytail = LOCK["plugins"]["ponytail"]
+    assert ["hermes", "plugins", "install", ponytail["repo"], "--ref", ponytail["commit"], "--enable"] in cmds
     assert ["uv", "tool", "install", f"git+{LOCK['stack-canary']['repo']}@{'d' * 40}"] in cmds
-    assert not [c for c in cmds if c[:2] == ["hermes", "plugins"] and c[2] != "enable"]  # no plugin reinstall
+    assert not [c for c in cmds if c[:2] == ["hermes", "plugins"] and c[3] != ponytail["repo"]]  # no own plugin
     assert fl.updates[0][0] == Pin("v0.16.40", LOCK["freellmapi"]["commit"])
     assert cli.PLUGIN_UPDATES in capsys.readouterr().out
 
@@ -415,30 +439,41 @@ def test_update_asks_before_it_installs_a_missing_ponytail(tmp_home):
     fx = cli.Effects(run=run, ask=ask)
     cli.handle(parse("update", "all"), fx)
     assert "ponytail is not installed. Install it from its pinned commit? [y/N] " in asked
-    assert not [c for c in run.commands() if c[0] == "git" or c[:3] == ["hermes", "plugins", "enable"]]
+    assert not [c for c in run.commands() if c[:3] == ["hermes", "plugins", "install"]]
 
 
-def test_update_and_install_move_a_ponytail_clone_to_the_lock_commit(tmp_home):
+@pytest.mark.parametrize("revision, hint",
+                         [(None, False), (SHA_OLD, True), (LOCK["plugins"]["ponytail"]["commit"], False)])
+def test_update_and_install_leave_a_ponytail_that_is_there(tmp_home, capsys, revision, hint):
     home = tmp_home / ".hermes"
-    folder = home / "plugins" / "ponytail"
-    (folder / ".git").mkdir(parents=True)  # programs.ponytail_fallback's clone, which Hermes keeps no record of
+    pin = LOCK["plugins"]["ponytail"]
+    (home / "plugins" / "ponytail" / ".git").mkdir(parents=True)  # without a record: the clone of Polytropos 0.1.1
     own = "https://github.com/Lil-Clanky/polytropos.git#plugins/"
-    (home / "plugins" / ".install-metadata.json").write_text(json.dumps({
-        "polytropos": {"source": own + "polytropos", "revision": SHA_NEW},
-        "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW}}))
-    commit = LOCK["plugins"]["ponytail"]["commit"]
-    head = ["git", "-C", str(folder), "rev-parse", "HEAD"]  # FakeRun prints nothing, so the clone is elsewhere
-    move = [head, ["git", "-C", str(folder), "fetch", "--depth", "1", "origin", commit],
-            ["git", "-C", str(folder), "checkout", commit]]
+    meta = {"polytropos": {"source": own + "polytropos", "revision": SHA_NEW},
+            "polytropos-router": {"source": own + "polytropos_router", "revision": SHA_NEW}}
+    if revision:
+        meta["ponytail"] = {"source": pin["repo"], "revision": revision, "pinned": True}
+    (home / "plugins" / ".install-metadata.json").write_text(json.dumps(meta))
+    move = f"hermes plugins install {pin['repo']} --ref {pin['commit']} --force"
     versions = {"rtk": LOCK["rtk"]["version"], "graphify": LOCK["graphify"]["version"],
                 "ast-grep": LOCK["ast-grep"]["version"], "canary": ""}
     run = FakeRun(versions=versions)
-    fx = cli.Effects(run=run, ask=lambda q: "y")
-    assert cli.handle(parse("update"), fx) == 0
-    assert [c for c in run.commands() if c[0] == "git"] == move
+    assert cli.handle(parse("update"), cli.Effects(run=run, ask=lambda q: "y")) == 0
+    assert not [c for c in run.commands() if c[:2] == ["hermes", "plugins"]]
+    assert (move in capsys.readouterr().out) == hint
     run = FakeRun()
     assert cli.handle(parse("install", "--only", "ponytail"), cli.Effects(run=run, ask=no_questions)) == 0
-    assert run.commands() == move
+    assert run.commands() == []
+    assert (move in capsys.readouterr().out) == hint
+
+
+def test_a_refused_ponytail_install_does_not_fail_install(tmp_home, capsys):
+    run = FakeRun(fail=[("hermes", "plugins", "install")])
+    assert cli.handle(parse("install", "--only", "ponytail"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands()[0][:3] == ["hermes", "plugins", "install"] and run.commands()[0][-1] == "--enable"
+    out = capsys.readouterr().out
+    assert "ponytail was not installed, because Hermes does not accept ponytail's plugin.json yet." in out
+    assert "Install finished." in out
 
 
 def installed_lock(monkeypatch, tmp_home, text):
@@ -484,6 +519,7 @@ def test_update_freellmapi_shows_both_tags_and_the_compare_link_before_it_asks(t
 
 # --- uninstall ---
 
+@managed
 def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     home = tmp_home / ".hermes"
     (home / "plugins" / "polytropos").mkdir(parents=True)
@@ -496,7 +532,6 @@ def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     set_mode(state, "freellmapi", "managed")
     use_shared(state, "qmd", profile, version=LOCK["optional"]["qmd"]["version"], installed_by_us=True)
     use_shared(state, "graphify", profile, version=LOCK["graphify"]["version"], installed_by_us=False)
-    record_config_change(state, profile, "model", USER_MODEL, FREELLM_MODEL)
     record_config_change(state, profile, R + "routes.simple", None, ["freellmapi/auto"])
     record_config_change(state, profile, "model.base_url", "http://localhost:3001/v1", None)
     record_config_change(state, profile, "model.provider", "custom", "polytropos-router")
@@ -513,8 +548,7 @@ def test_uninstall_keeps_data_without_purge_data(tmp_home, capsys):
     cmds = run.commands()
     assert cmds.index(["hermes", "config", "set", "model.provider", "custom"]) < cmds.index(
         ["hermes", "config", "set", "model.base_url", "http://localhost:3001/v1"]) < cmds.index(
-        ["hermes", "config", "unset", R + "routes.simple"]) < cmds.index(
-        ["hermes", "config", "set", "--force", "model", json.dumps(USER_MODEL)])  # the user's own block comes last
+        ["hermes", "config", "unset", R + "routes.simple"])
     assert ["npm", "uninstall", "-g", LOCK["optional"]["qmd"]["package"]] in cmds
     assert not any(c[:2] == ["uv", "tool"] for c in cmds)
     after = load_state()
@@ -547,8 +581,19 @@ def test_purge_data_waits_for_the_last_profile_and_a_typed_yes(tmp_home, monkeyp
     assert not root.exists() and f"Deleted {root}." in capsys.readouterr().out
 
 
-def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home):
-    home = tmp_home / ".hermes"
+def test_uninstall_removes_programs_without_provider_keys(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
+    progs, envs = {p.name: p for p in cli._programs(LOCK)}, []
+    fx = cli.Effects(run=lambda argv, **kw: envs.append((argv[:2], kw.get("env"))))
+    for name in ("qmd", "graphify"):
+        cli._remove_program(progs[name], fx)
+    assert [argv for argv, _ in envs] == [["npm", "uninstall"], ["uv", "tool"]]
+    assert all("OPENAI_API_KEY" not in env and env["PATH"] == os.environ["PATH"] for _, env in envs)
+
+
+def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home, monkeypatch):
+    home = paths.default_hermes_home()  # where graphify writes; ~/.hermes, or %LOCALAPPDATA%\hermes on Windows
+    monkeypatch.setenv("HERMES_HOME", str(home))
     own_skill = home / "skills" / "software-development" / "ast-grep"  # the user's own, there before the install
     own_skill.mkdir(parents=True)
     (home / "config.yaml").write_text(yaml.safe_dump({"mcp_servers": {"mine": {"command": "my-mcp"}}}))
@@ -589,7 +634,7 @@ def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(t
            "added": str(home / "skills" / "research" / "qmd")}
     state = State()
     state.profiles[str(home)] = {"integrations": [
-        {"ran": rtk, "added": str(home / "plugins" / "rtk")},
+        {"ran": rtk, "added": str(home / "plugins" / "rtk-rewrite")},
         {"ran": ["graphify", "install", "--platform", "hermes"], "added": str(graphify)}, qmd]}
     save_state(state)
     run = FakeRun(fail=[("hermes", "skills", "uninstall")])
@@ -599,6 +644,36 @@ def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(t
     assert graphify.is_dir() and f"added {graphify}, which is outside this profile" in out
     assert "Run this command yourself: hermes skills uninstall qmd --yes" in out
     assert load_state().profiles[str(home)] == {"integrations": [qmd]}
+
+
+def test_rtk_works_on_this_profile_and_graphify_on_hermess_default_home(tmp_home, monkeypatch):
+    home = tmp_home / ".hermes" / "profiles" / "work"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    rtk = [str(tmp_home / ".local" / "bin" / "rtk"), "init", "--agent", "hermes"]
+    state = State()
+    state.profiles[str(home)] = {"integrations": [{"ran": rtk, "added": str(home / "plugins" / "rtk-rewrite")}]}
+    save_state(state)
+    envs = []
+    run = lambda argv, **kw: envs.append(kw.get("env")) or SimpleNamespace(returncode=0)  # noqa: E731
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert envs[0]["HERMES_HOME"] == str(home)  # rtk falls back to ~/.hermes without it
+    graphify = ["graphify", "install", "--platform", "hermes"]  # graphify ignores HERMES_HOME
+    monkeypatch.setattr(cli.paths.sys, "platform", "win32")
+    assert cli._added_by(graphify, home) == tmp_home / "AppData" / "Local" / "hermes" / "skills" / "graphify"
+    monkeypatch.setattr(cli.paths.sys, "platform", "linux")
+    assert cli._added_by(graphify, home) == tmp_home / ".hermes" / "skills" / "graphify"
+
+
+def test_install_records_rtks_hermes_plugin_and_uninstall_undoes_it(tmp_home):
+    home = tmp_home / ".hermes"
+    init = [cli._programs(LOCK)[0].version_cmd[0], "init", "--agent", "hermes"]
+    plugin = home / "plugins" / "rtk-rewrite"  # where rtk 1.2.1 puts it
+    run = FakeRun(versions={"rtk": LOCK["rtk"]["version"]}, on={tuple(init): lambda argv: plugin.mkdir(parents=True)})
+    assert cli.handle(parse("install", "--only", "rtk"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert load_state().profiles[str(home)] == {"integrations": [{"ran": init, "added": str(plugin)}]}
+    run = FakeRun()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert [c for c in run.commands() if c[0] == init[0]] == [[*init, "--uninstall"]]
 
 
 def test_install_records_setup_opencode_when_it_changes_opencodes_config(tmp_home, monkeypatch):
@@ -637,15 +712,17 @@ def test_uninstall_exits_1_and_keeps_the_record_when_a_restore_fails(tmp_home, c
     home.mkdir()
     (home / "config.yaml").write_text(yaml.safe_dump({"model": {"provider": "polytropos-router", "default": "auto"}}))
     state = State()
-    record_config_change(state, str(home), "model", USER_MODEL, FREELLM_MODEL)
+    record_config_change(state, str(home), "model.provider", "custom", "polytropos-router")
     record_config_change(state, str(home), "model.default", "free-model", "auto")
     save_state(state)
-    run = FakeRun(fail=[("hermes", "config", "set", "--force", "model")])
+    run = FakeRun(fail=[("hermes", "config", "set", "model.provider")])
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 1
-    assert run.commands()[-1] == ["hermes", "config", "set", "--force", "model", json.dumps(USER_MODEL)]
-    out = capsys.readouterr().out
-    assert "Restoring model failed" in out and USER_MODEL["api_key"] not in out  # a model block can hold a key
-    assert config_changes(load_state(), str(home)) == [{"key": "model", "old": USER_MODEL, "new": FREELLM_MODEL}]
+    assert run.commands() == [["hermes", "config", "set", "model.default", "free-model"],
+                              ["hermes", "config", "set", "model.provider", "custom"]]
+    assert "Restoring model.provider failed. Run this command yourself: hermes config set model.provider custom" \
+           in capsys.readouterr().out
+    assert config_changes(load_state(), str(home)) == [
+        {"key": "model.provider", "old": "custom", "new": "polytropos-router"}]
 
 
 def test_install_leaves_an_mcp_entry_that_was_there_before_unrecorded(tmp_home):
@@ -710,11 +787,10 @@ def missing(argv):
     raise FileNotFoundError(f"[Errno 2] No such file or directory: {argv[0]!r}")
 
 
-def test_commands_that_cannot_start_are_reported_and_keep_the_state(tmp_home, capsys):
+def test_commands_that_cannot_start_are_reported_and_keep_the_state(tmp_home, monkeypatch, capsys):
     home = tmp_home / ".hermes"
     home.mkdir()
-    assert cli.handle(parse("setup"), cli.Effects(run=FakeRun(on={("npx",): missing}), ask=no_questions)) == 1
-    assert "npx could not run: [Errno 2] No such file or directory: 'npx'" in capsys.readouterr().out
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-test-key")
 
     def written(argv):  # what `hermes config set` does
         router = {"routes": {"complex": json.loads(argv[4])}}
@@ -737,70 +813,95 @@ def test_commands_that_cannot_start_are_reported_and_keep_the_state(tmp_home, ca
 
 # --- setup ---
 
-UPSTREAM = {"base_url": "http://127.0.0.1:3001/v1", "api_key_env": "FREELLMAPI_API_KEY"}
+UPSTREAM = {"base_url": f"http://127.0.0.1:{PORT}/v1", "api_key_env": "FREELLMAPI_API_KEY"}  # 31415 on Windows
 USER_MODEL = {"provider": "openrouter", "default": "some/model", "api_key": "sk-user-test-key"}
-# What FreeLLMAPI's setup-hermes leaves in the model block (~/freellmapi/cli/src/tools.ts, function hermes).
+# What FreeLLMAPI's setup-hermes, which the setup of Polytropos 0.1.1 ran, left in the model block
+# (~/freellmapi/cli/src/tools.ts, function hermes).
 FREELLM_MODEL = {"provider": "custom", "default": "free-model", "base_url": "http://127.0.0.1:3001/v1",
                  "api_key": "${FREELLMAPI_API_KEY}", "api_mode": "chat_completions", "context_length": 131072,
                  "default_headers": {"User-Agent": "hermes-agent"}}
 
 
-def setup_hermes_rewrites_model(home):
-    def effect(argv):
-        config = yaml.safe_load((home / "config.yaml").read_text())
-        config["model"] = FREELLM_MODEL
-        (home / "config.yaml").write_text(yaml.safe_dump(config))
-    return effect
+def test_setup_stops_without_the_key(tmp_home, monkeypatch, capsys):
+    monkeypatch.delenv("FREELLMAPI_API_KEY", raising=False)
+    run = FakeRun()
+    assert cli.handle(parse("setup"), cli.Effects(run=run, ask=no_questions)) == 1
+    assert run.commands() == []
+    assert "  hermes config set FREELLMAPI_API_KEY <key>" in capsys.readouterr().out
+    assert load_state().profiles == {}
 
 
-def test_setup_records_the_users_model_before_setup_hermes_rewrites_it(tmp_home):
+def test_setup_writes_single_keys_and_records_no_secret(tmp_home, monkeypatch):
     home = tmp_home / ".hermes"
     home.mkdir()
     (home / "config.yaml").write_text(yaml.safe_dump({
         "model": USER_MODEL, "plugins": {"entries": {"polytropos-router": {"routes": {"simple": ["old/model"]}}}}}))
-    run, asked = FakeRun(on={("npx",): setup_hermes_rewrites_model(home)}), []
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-test-key")
+    run, asked = FakeRun(), []
     assert cli.handle(parse("setup"), cli.Effects(run=run, ask=lambda q: asked.append(q) or "y")) == 0
-    cmds = run.commands()
-    assert cmds[0] == ["npx", f"freellmapi@{LOCK['freellmapi']['cli_version']}", "setup-hermes"]
-    assert [c[3:] for c in cmds[1:]] == [
-        [R + "routes.complex", '["freellmapi/auto"]'], [R + "routes.simple", '["freellmapi/auto"]'],
-        [R + "classifier", "freellmapi/auto"], [R + "upstreams.freellmapi", json.dumps(UPSTREAM)],
-        ["model.provider", "polytropos-router"], ["model.default", "auto"], ["model.context_length"]]
-    assert all(c[:3] == ["hermes", "config", "set"] for c in cmds[1:-1])
-    assert cmds[-1][:3] == ["hermes", "config", "unset"]  # setup-hermes's window would override the router's
+    assert asked == ["Make the Polytropos router the default model (provider polytropos-router, model auto)? [y/N] "]
+    assert run.commands() == [["hermes", "config", "set", key, value] for key, value in (
+        (R + "routes.complex", '["freellmapi/auto"]'), (R + "routes.simple", '["freellmapi/auto"]'),
+        (R + "classifier", "freellmapi/auto"), (R + "upstreams.freellmapi", json.dumps(UPSTREAM)),
+        ("model.provider", "polytropos-router"), ("model.default", "auto"))]
     assert config_changes(load_state(), str(home)) == [
-        {"key": "model", "old": USER_MODEL, "new": FREELLM_MODEL},
         {"key": R + "routes.complex", "old": None, "new": ["freellmapi/auto"]},
         {"key": R + "routes.simple", "old": ["old/model"], "new": ["freellmapi/auto"]},
         {"key": R + "classifier", "old": None, "new": "freellmapi/auto"},
         {"key": R + "upstreams.freellmapi", "old": None, "new": UPSTREAM},
-        {"key": "model.base_url", "old": FREELLM_MODEL["base_url"], "new": None},
-        {"key": "model.api_mode", "old": "chat_completions", "new": None},
-        {"key": "model.provider", "old": "custom", "new": "polytropos-router"},
-        {"key": "model.default", "old": "free-model", "new": "auto"},
-        {"key": "model.context_length", "old": 131072, "new": None}]
-    assert len(asked) == 1 and "default model" in asked[0]
-    run = FakeRun()  # the fake config set changed nothing, so only the model block differs from its old value
-    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
-    [restore] = run.commands()
-    assert restore[:5] == ["hermes", "config", "set", "--force", "model"] and json.loads(restore[5]) == USER_MODEL
+        {"key": "model.provider", "old": "openrouter", "new": "polytropos-router"},
+        {"key": "model.default", "old": "some/model", "new": "auto"}]
+    assert USER_MODEL["api_key"] not in (paths.state_dir() / "state.json").read_text()
 
 
-def test_uninstall_brings_back_a_model_that_was_a_string(tmp_home):
+def test_uninstall_of_a_legacy_model_record_writes_no_secret_back(tmp_home, capsys):
     home = tmp_home / ".hermes"
     home.mkdir()
-    (home / "config.yaml").write_text(yaml.safe_dump({"model": "openrouter/some-model"}))
-    run = FakeRun(on={("npx",): setup_hermes_rewrites_model(home)})
-    assert cli.handle(parse("setup"), cli.Effects(run=run, ask=lambda q: "n")) == 0
-    assert config_changes(load_state(), str(home))[0] == {
-        "key": "model", "old": "openrouter/some-model", "new": FREELLM_MODEL}
-    run = FakeRun()  # without --force, Hermes would put the string into model.default and keep FreeLLMAPI's keys
+    (home / "config.yaml").write_text(yaml.safe_dump({"model": {
+        "provider": "polytropos-router", "default": "auto", "api_key": "${FREELLMAPI_API_KEY}",
+        "default_headers": FREELLM_MODEL["default_headers"]}}))
+    state = State()  # as the setup of Polytropos 0.1.1 left it
+    record_config_change(state, str(home), "model", {**USER_MODEL, "key_env": "MY_PROVIDER_KEY"}, FREELLM_MODEL)
+    for key, old, new in (("model.base_url", FREELLM_MODEL["base_url"], None),
+                          ("model.api_mode", "chat_completions", None),
+                          ("model.provider", "custom", "polytropos-router"),
+                          ("model.default", "free-model", "auto"), ("model.context_length", 131072, None)):
+        record_config_change(state, str(home), key, old, new)
+    save_state(state)
+    run = FakeRun()
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
-    assert run.commands() == [["hermes", "config", "set", "--force", "model", "openrouter/some-model"]]
+    assert run.commands() == [["hermes", "config", "unset", "model.api_key"],
+                              ["hermes", "config", "set", "model.provider", "openrouter"],
+                              ["hermes", "config", "set", "model.key_env", "MY_PROVIDER_KEY"],
+                              ["hermes", "config", "unset", "model.default_headers"],
+                              ["hermes", "config", "set", "model.default", "some/model"]]
+    out = capsys.readouterr().out
+    assert "held an api_key, which uninstall does not write back" in out and USER_MODEL["api_key"] not in out
+    assert str(home) not in load_state().profiles
+    assert USER_MODEL["api_key"] not in (paths.state_dir() / "state.json").read_text()
 
 
-def test_setup_stops_at_a_failed_key_and_keeps_what_it_recorded(tmp_home, capsys):
+def test_uninstall_brings_back_a_model_that_was_a_string(tmp_home, capsys):
     home = tmp_home / ".hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text(yaml.safe_dump({"model": {**FREELLM_MODEL, "api_key": "sk-own-since"}}))
+    state = State()
+    record_config_change(state, str(home), "model", "openrouter/some-model", FREELLM_MODEL)
+    save_state(state)
+    run = FakeRun()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands() == [["hermes", "config", "unset", "model.provider"],  # model.api_key was set since: it stays
+                              ["hermes", "config", "unset", "model.default_headers"],
+                              ["hermes", "config", "set", "model.default", "openrouter/some-model"],
+                              ["hermes", "config", "unset", "model.context_length"],
+                              ["hermes", "config", "unset", "model.base_url"],
+                              ["hermes", "config", "unset", "model.api_mode"]]
+    assert "api_key" not in capsys.readouterr().out
+
+
+def test_setup_stops_at_a_failed_key_and_keeps_what_it_recorded(tmp_home, monkeypatch, capsys):
+    home = tmp_home / ".hermes"
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-test-key")
     state = State()
     use_shared(state, "freellmapi", str(home), version="v0.16.36", installed_by_us=False)
     set_mode(state, "freellmapi", "external")
@@ -808,7 +909,6 @@ def test_setup_stops_at_a_failed_key_and_keeps_what_it_recorded(tmp_home, capsys
     run = FakeRun(fail=[("hermes", "config", "set", "model.provider")])
     answers = iter(["http://192.0.2.5:3001/v1/", "y"])
     assert cli.handle(parse("setup"), cli.Effects(run=run, ask=lambda q: next(answers))) == 1
-    assert run.commands()[0][-2:] == ["--url", "http://192.0.2.5:3001"]
     changes = config_changes(load_state(), str(home))
     assert [c["key"] for c in changes] == [R + "routes.complex", R + "routes.simple", R + "classifier",
                                            R + "upstreams.freellmapi"]
@@ -847,3 +947,12 @@ def test_slash_shows_health_guard_and_last_decision(tmp_home, monkeypatch):
     assert "FreeLLMAPI: healthy" in out and "memory pressure is warning" in out
     assert "simple" in out and "classifier" in out and "local/llama3.2:3b" in out
     assert FakeSlashFreeLLM.keys == ["sk-test-secret"] and "sk-test-secret" not in out
+
+
+def test_uninstall_deletes_rtk_exe_on_windows(tmp_home):
+    rtk = {p.name: p for p in cli.programs.programs(LOCK, platform="win32", machine="AMD64")}["rtk"]
+    exe = tmp_home / ".local" / "bin" / "rtk.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    cli._remove_program(rtk, cli.Effects(run=FakeRun()))
+    assert not exe.exists()

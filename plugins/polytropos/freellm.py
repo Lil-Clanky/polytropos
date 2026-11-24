@@ -17,11 +17,14 @@ from pathlib import Path
 from typing import Callable
 
 from ._shared import paths
+from .programs import child_env
 from .services import ServiceManager, ServiceSpec
 from .state import load_state
 
 REPO_URL = "https://github.com/tashfeenahmed/freellmapi.git"
-PORT = 3001
+# On Windows Polytropos uses FreeLLMAPI's desktop app on 127.0.0.1, at the port it saved (read once per process).
+DESKTOP_PORT = paths.FREELLMAPI_DESKTOP_PORT
+PORT = paths.freellmapi_port()
 _URL = f"http://127.0.0.1:{PORT}/v1/models"
 _DATA_FILES = ("freeapi.db", "freeapi.db-wal", "freeapi.db-shm", ".encryption-key", ".env")  # WAL is on in FreeLLMAPI
 _SECRET_FILES = {".encryption-key", ".env"}
@@ -151,8 +154,8 @@ class FreeLLM:
 
     # --- build and install ---
 
-    def _step(self, argv: list[str], cwd: Path | None = None) -> str:
-        res = self.run(argv, capture_output=True, text=True, check=False, cwd=cwd)
+    def _step(self, argv: list[str], cwd: Path | None = None, env: dict | None = None) -> str:
+        res = self.run(argv, capture_output=True, text=True, check=False, cwd=cwd, env=env)
         if res.returncode != 0:
             tail = (res.stderr or res.stdout or "").strip()[-500:]
             raise BuildError(f"`{' '.join(argv)}` failed: {tail}")
@@ -176,8 +179,8 @@ class FreeLLM:
             elif server_data.exists():
                 shutil.rmtree(server_data)
             server_data.symlink_to(data)
-            self._step(["npm", "ci"], cwd=dest)
-            self._step(["npm", "run", "build"], cwd=dest)
+            self._step(["npm", "ci"], cwd=dest, env=child_env())
+            self._step(["npm", "run", "build"], cwd=dest, env=child_env())
         except (BuildError, OSError) as err:
             shutil.rmtree(dest, ignore_errors=True)
             raise err if isinstance(err, BuildError) else BuildError(str(err)) from err
@@ -390,11 +393,6 @@ class FreeLLM:
         except RestartFailed as err:
             return UpdateResult(False, new, old, True, str(err))
         return UpdateResult(True, new, old, True, f"restored {old}" + ("" if back else ", which does not answer yet"))
-
-    def cli_command(self, lock: dict) -> list[str]:
-        if self._is_managed_mode():
-            return [self.node, str(self.root / "current/cli/dist/index.js")]
-        return ["npx", f"freellmapi@{lock['freellmapi']['cli_version']}"]
 
 
 def _is_json(body: bytes) -> bool:

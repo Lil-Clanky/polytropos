@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -54,6 +55,7 @@ def test_import_without_hermes():
     code = "import sys; import polytropos_router as p; assert 'providers' not in sys.modules; print(len(p.REGISTERED))"
     plugins = str(Path(polytropos_router.__file__).parents[1])
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                         env={"PYTHONPATH": plugins, "HOME": "/nonexistent"})
+                         env={"PYTHONPATH": plugins, "HOME": "/nonexistent",
+                              **{k: v for k, v in os.environ.items() if k.upper() == "SYSTEMROOT"}})  # Windows
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "1"

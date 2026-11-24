@@ -214,3 +214,9 @@ def test_errors_name_the_position_only(section):
     with pytest.raises(ConfigError) as e:
         parse_config({**SPEC, **section})
     assert "ROUTE999" not in str(e.value)
+
+
+def test_default_upstream_is_where_the_polytropos_plugin_looks_for_freellmapi():
+    from polytropos.freellm import PORT  # 3001, or 31415 on Windows, the desktop app's port
+
+    assert DEFAULT_CONFIG.upstreams["freellmapi"].base_url == f"http://127.0.0.1:{PORT}/v1"

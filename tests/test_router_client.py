@@ -2,6 +2,7 @@ import json
 import logging
 import socket
 import stat
+import sys
 import threading
 import time
 from types import SimpleNamespace as NS
@@ -235,7 +236,7 @@ def test_trace_file_mode(local, cloud, tmp_path):
     rc = router(local, cloud, config(local, cloud, save_traces=True), trace_path=path)
     rc.chat.completions.create(model="auto", messages=turn("private words"))
     list(rc.chat.completions.create(model="auto", messages=turn("private words") + TOOL_STEP, stream=True))
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert sys.platform == "win32" or stat.S_IMODE(path.stat().st_mode) == 0o600  # Windows keeps no mode bits
     expected = {"time": ANY, "tier": "simple", "reason": "classifier", "slot": "ollama/llama3.2:3b",
                 "retried": False, "fell_back_from": []}
     assert [json.loads(line) for line in path.read_text().splitlines()] == [expected, expected]

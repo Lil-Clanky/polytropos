@@ -98,17 +98,9 @@ def install_records(hermes_home: Path) -> dict:
     return {_repo_subdir(str(r.get("source") or "")): (name, r) for name, r in metadata.items() if isinstance(r, dict)}
 
 
-def _git_head(run: Callable, folder: Path) -> str:
-    try:
-        return run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True, text=True,
-                   check=False).stdout.strip()
-    except OSError:  # git is not installed
-        return ""
-
-
 def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
-    """Each pack entry against its install record. An entry with a name may also be a git clone in plugins/<name>.
-    An entry without a ref counts as not installed: the own plugins have none when the general plugin has no record."""
+    """Each pack entry against its install record. An entry without a ref counts as not installed: the own plugins
+    have none when the general plugin has no record."""
     try:
         installed = install_records(ctx.hermes_home)
     except (OSError, ValueError) as e:
@@ -119,13 +111,16 @@ def check_plugins(ctx: DoctorContext) -> list[CheckResult]:
         key = _repo_subdir(str(entry["repo"]), entry.get("subdir") or "")
         pinned = str(entry["ref"]).lower()
         label = key[0] + (f"#{key[1]}" if key[1] else "")
-        folder = ctx.hermes_home / "plugins" / entry.get("name", "")
-        if key not in installed and entry.get("name") and (folder / ".git").exists():
-            # programs.ponytail_fallback clones without Hermes's installer, which leaves no record
-            installed[key] = (entry["name"], {"revision": _git_head(ctx.run, folder)})
+        if entry.get("name") == "ponytail" and key not in installed:  # Hermes does not accept its plugin.json yet
+            if (ctx.hermes_home / "plugins" / "ponytail").is_dir():
+                results.append(CheckResult("info", "plugin ponytail was installed without Hermes's installer",
+                                           "Hermes keeps no install record of it, so its commit is not checked"))
+            else:
+                results.append(CheckResult("warn", f"plugin {label} is not installed",
+                                           fix="hermes polytropos install --only ponytail"))
+            continue
         if key not in installed or not pinned:
             fix = ("install Polytropos again, see Install in its README" if key[0] == "Lil-Clanky/polytropos"
-                   else "hermes polytropos install --only ponytail" if entry.get("name") == "ponytail"
                    else f"hermes plugins install {entry['repo']} --ref {pinned}")
             results.append(CheckResult("fail", f"plugin {label} is not installed", fix=fix))
             continue
@@ -152,11 +147,12 @@ def check_freellmapi(ctx: DoctorContext) -> list[CheckResult]:
                             f"Stop that program or free port {PORT}, then run hermes polytropos install")]
     key = api_key()  # never printed
     if not key:
-        return [CheckResult("warn", "this profile has no FREELLMAPI_API_KEY", fix="hermes polytropos setup")]
+        return [CheckResult("warn", "this profile has no FREELLMAPI_API_KEY",
+                            fix="hermes config set FREELLMAPI_API_KEY <key>")]
     status, _ = ctx.http_get(f"http://127.0.0.1:{PORT}/v1/models", {"Authorization": f"Bearer {key}"})
     if status == 401:
         return [CheckResult("warn", "FreeLLMAPI does not accept this profile's FREELLMAPI_API_KEY",
-                            fix="hermes polytropos setup")]
+                            fix="hermes config set FREELLMAPI_API_KEY <key>")]
     if status != 200:  # 0 and -1 are http_get's codes for no answer, never an HTTP status
         return [CheckResult("warn", f"FreeLLMAPI answers on port {PORT} but /v1/models is not healthy",
                             f"it returned HTTP {status}" if status > 0 else "FreeLLMAPI did not answer")]
@@ -169,6 +165,8 @@ def check_node(ctx: DoctorContext) -> list[CheckResult]:
     ok, found = FreeLLM(run=ctx.run).node_ok()
     if ok:
         return [CheckResult("ok", f"Node {found}")]
+    if ctx.platform == "win32":  # FreeLLMAPI's desktop app brings its own runtime
+        return [CheckResult("info", found, "on Windows FreeLLMAPI runs as its desktop app, which needs no Node")]
     if load_state().shared.get("freellmapi", {}).get("mode") == "external":
         return [CheckResult("info", found, "FreeLLMAPI runs in external mode, so Polytropos does not run it")]
     return [CheckResult("fail", found, fix="Install Node 22 or 24 for FreeLLMAPI, for example from "

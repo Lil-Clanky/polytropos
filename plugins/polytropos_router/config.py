@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ._shared.paths import freellmapi_port
+
 try:
     from hermes_yaml import safe_load
 except ImportError:  # outside Hermes
@@ -40,8 +42,10 @@ class RouterConfig:
 
 
 _AUTO = Slot("freellmapi", "auto")
+# FreeLLMAPI as Polytropos runs it, or on Windows its desktop app at the port it saved
+_FREELLMAPI_URL = f"http://127.0.0.1:{freellmapi_port()}/v1"
 DEFAULT_CONFIG = RouterConfig(
-    upstreams={"freellmapi": Upstream("freellmapi", "http://127.0.0.1:3001/v1", api_key_env="FREELLMAPI_API_KEY")},
+    upstreams={"freellmapi": Upstream("freellmapi", _FREELLMAPI_URL, api_key_env="FREELLMAPI_API_KEY")},
     routes={"simple": (_AUTO,), "complex": (_AUTO,)},
     classifier=_AUTO,
 )
