@@ -2,6 +2,7 @@ import copy
 import datetime
 import json
 import os
+import time
 
 import pytest
 from polymetis_data import INDEX, ONESHOT, TOOLS
@@ -86,6 +87,13 @@ def test_strip_skills_keeps_the_rest_of_the_prompt():
     assert "\n\n\n" not in out
 
 
+def test_strip_skills_takes_linear_time_on_a_long_line():
+    text = "word " * 8_000  # one line of 40k characters without a pointer
+    started = time.perf_counter()
+    assert catalog.strip_skills(text) == text
+    assert time.perf_counter() - started < 0.5  # a pattern tried at every position took 5 seconds here
+
+
 def test_keep_skills_lists_only_the_named_skills():
     out = catalog.keep_skills(INDEX, ["ascii-art", "not-installed"])
     assert [s.name for s in catalog.parse_index(out)] == ["ascii-art"]
@@ -97,7 +105,8 @@ def test_keep_skills_with_no_match_strips_the_index():
 
 
 def test_text_of_joins_text_parts_only():
-    parts = [{"type": "text", "text": "a"}, {"type": "image_url", "image_url": {"url": "x"}}, {"type": "text", "text": "b"}]
+    parts = [{"type": "text", "text": "a"}, {"type": "image_url", "image_url": {"url": "x"}},
+             {"text": "b"}, {"cachePoint": {"type": "default"}}]  # the last two as Bedrock sends them
     assert catalog.text_of(parts) == "a\nb" and catalog.text_of(None) == ""
 
 
@@ -252,6 +261,29 @@ def test_without_skills_drops_the_skill_tools_and_the_index():
     out = shape.without_skills(request())
     assert names(out) == ["terminal", "read_file", "write_file", "web_search", "browser_navigate", "image_generate"]
     assert "skill_view" not in shape.system_text(out) and "<skill-hint>" not in out["messages"][1]["content"]
+
+
+def test_without_skills_reads_each_format_hermes_sends():
+    tool_names = [shape.tool_name(t) for t in TOOLS]
+    cache = {"cachePoint": {"type": "default"}}
+    formats = {
+        "anthropic": {"system": [{"type": "text", "text": INDEX, "cache_control": {"type": "ephemeral"}}],
+                      "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+                      "tools": [{"name": n, "input_schema": {}} for n in tool_names]},
+        "responses": {"instructions": INDEX, "input": [{"role": "user", "content": "hi"}],
+                      "tools": [{"type": "function", "name": n} for n in tool_names]},
+        "bedrock": {"system": [{"text": INDEX}, cache], "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+                    "toolConfig": {"tools": [{"toolSpec": {"name": n}} for n in tool_names] + [cache]}},
+        "developer": {"messages": [{"role": "developer", "content": INDEX}, {"role": "user", "content": "hi"}],
+                      "tools": copy.deepcopy(TOOLS)},
+    }
+    for name, req in formats.items():
+        out = json.dumps(shape.without_skills(req))
+        assert "skill_view" not in out and "<available_skills>" not in out, name
+        assert "terminal" in out and "You are Hermes" in out, name
+        assert set(shape.without_skills(req)) == set(req), name  # the Responses API rejects a `messages` key
+    assert shape.without_skills(formats["anthropic"])["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert shape.without_skills(formats["bedrock"])["toolConfig"]["tools"][-1] == cache
 
 
 # --- the log ---

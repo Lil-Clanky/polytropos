@@ -13,8 +13,10 @@ HEADER = "## Skills\n"
 LAST_LINE = "Only proceed without loading a skill if genuinely none are relevant to the task."
 HINT = re.compile(r"\n*<skill-hint>.*?</skill-hint>", re.S)
 # shortcut: drops whole sentences that point at skill_view(, which matches Hermes's wording today;
-# a sentence with a dot inside the call would be cut short, revisit when the wording changes
-POINTER = re.compile(r"[^.\n]*\bskill_view\([^)]*\)[^.\n]*\.?[ \t]?")
+# a sentence with a dot inside the call would be cut short, revisit when the wording changes.
+# A match may start only where a sentence can: without that anchor the leading [^.\n]* is tried at
+# every position of a long line, which is quadratic.
+POINTER = re.compile(r"(?:^|(?<=[.\n])|(?<=[.\n][ \t]))[^.\n]*\bskill_view\([^)]*\)[^.\n]*\.?[ \t]?")
 
 
 @dataclass(frozen=True)
@@ -24,12 +26,18 @@ class Skill:
     category: str = ""
 
 
+def is_text_part(part) -> bool:
+    """A text part of a message: ``{"type": "text", "text": ...}`` as OpenAI and Anthropic send it, or
+    Bedrock's ``{"text": ...}``."""
+    return isinstance(part, dict) and isinstance(part.get("text"), str) and part.get("type", "text") == "text"
+
+
 def text_of(content) -> str:
     """The text of a message content: a string, or the text parts of a list of parts."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(p.get("text") or "" for p in content if isinstance(p, dict) and p.get("type") == "text")
+        return "\n".join(p["text"] for p in content if is_text_part(p))
     return ""
 
 
