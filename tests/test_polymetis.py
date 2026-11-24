@@ -330,7 +330,7 @@ NOW = 1_800_000_000.0
 def rec(t, **kw):
     base = {"time": NOW - t * DAY, "session": "a", "turn": 1, "platform": "cli", "level": "lean", "arm": "normal",
             "tip": [], "tip_given": False, "used_skills": [], "answered_by": ["m1"], "outcome": "completed",
-            "tool_errors": 0, "tokens_in": 100, "tokens_out": 10}
+            "tool_errors": 0, "tokens_in": 100, "tokens_out": 10, "api_calls": 1}
     return {**base, **kw}
 
 
@@ -363,7 +363,18 @@ def test_report_compares_the_ablation_arm():
     assert "Ablation comparison" in out
     row = next(line for line in out.splitlines() if line.strip().startswith("ablation"))
     assert row.split()[1:4] == ["1", "1", "2.00"]
-    assert "Proposal: run an ablation week" not in out
+    assert "Proposal: run an ablation week" not in out and "Left out" not in out
+
+
+def test_report_leaves_out_sessions_that_changed_group_and_turns_it_did_not_see():
+    records = [rec(1, session="a"), rec(1, session="b", arm="ablation", level="none"),
+               rec(1, session="c", arm="ablation", level="none"), rec(1, session="c", turn=2),  # the ablation ended
+               rec(1, session="d", arm="ablation", level="none", api_calls=0)]  # as in codex_app_server mode
+    out = report.render(records, now=NOW)
+    rows = {line.split()[0]: line.split()[1:3] for line in out.splitlines() if line.startswith("  normal")
+            or line.startswith("  ablation")}
+    assert rows == {"normal": ["1", "1"], "ablation": ["1", "1"]}
+    assert "Left out: 1 sessions that changed group, and 1 turns without a request that Polymetis saw." in out
 
 
 def test_report_proposes_an_ablation_week_for_a_new_model():

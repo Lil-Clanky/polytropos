@@ -147,7 +147,7 @@ def _search(s: Settings, session: Session, turn: Turn) -> None:
 
 @_safe
 def on_pre_llm_call(session_id: str = "", turn_id: str = "", user_message: Any = None, platform: str = "",
-                    model: str = "", **kwargs) -> dict | None:
+                    model: str = "", is_first_turn: Any = None, **kwargs) -> dict | None:
     if not session_id:
         return None
     s = _refresh_settings()
@@ -156,7 +156,8 @@ def on_pre_llm_call(session_id: str = "", turn_id: str = "", user_message: Any =
     with STORE.lock:
         session = STORE.get(session_id)
         if session is None:
-            arm = decide.arm(s, session_id) if ablation_ready else "normal"
+            # only a new chat: one Polymetis first sees later, as after a restart, already used its skills
+            arm = decide.arm(s, session_id) if ablation_ready and is_first_turn else "normal"
             session = STORE.add(session_id, Session(key=decide.session_key(session_id), platform=platform or "",
                                                     model=model or "", arm=arm))
             if session.arm == "ablation":  # known before any index: the middleware removes it

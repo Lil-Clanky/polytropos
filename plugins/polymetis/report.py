@@ -40,11 +40,20 @@ def _ablation(all_records, now: float) -> list[str]:
 
 
 def _compare(records) -> list[str]:
-    arms = defaultdict(list)
-    for r in records:
-        arms[r.get("arm") or "normal"].append(r)
-    if "ablation" not in arms:
+    if not any(r.get("arm") == "ablation" for r in records):
         return []
+    groups = defaultdict(set)
+    for r in records:
+        groups[r.get("session")].add(r.get("arm") or "normal")
+    # a session changes group when the ablation ends or Hermes restarts; a turn without a request that
+    # Polymetis saw, as in Hermes's codex_app_server mode, shows nothing the ablation changed
+    changed = {session for session, arms in groups.items() if len(arms) > 1}
+    kept = [r for r in records if r.get("session") not in changed]
+    unseen = sum(not r.get("api_calls") for r in kept)
+    arms = defaultdict(list)
+    for r in kept:
+        if r.get("api_calls"):
+            arms[r.get("arm") or "normal"].append(r)
     lines = ["", "Ablation comparison (per turn unless noted):",
              f"  {'group':<10} {'sessions':>8} {'turns':>6} {'tool errors':>11} {'corrections':>11} "
              f"{'repeats':>7} {'failed':>6} {'tokens':>8}"]
@@ -57,6 +66,9 @@ def _compare(records) -> list[str]:
             f"{sum(bool(r.get('correction')) for r in rs) / n:>11.2f} {sum(bool(r.get('repeat')) for r in rs) / n:>7.2f} "
             f"{sum(r.get('outcome') == 'failed' for r in rs) / n:>6.2f} "
             f"{sum((r.get('tokens_in') or 0) + (r.get('tokens_out') or 0) for r in rs) / n:>8.0f}")
+    if changed or unseen:
+        lines.append(f"  Left out: {len(changed)} sessions that changed group, and {unseen} turns without a request "
+                     "that Polymetis saw.")
     lines.append("  Few sessions give noisy numbers; compare again after a full week.")
     return lines
 

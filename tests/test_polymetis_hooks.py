@@ -155,6 +155,15 @@ def test_an_ablation_ends_with_its_settings(pm, tmp_path):
     assert [(r["arm"], r["level"]) for r in records(tmp_path)] == [("ablation", "none"), ("normal", "lean")]
 
 
+def test_an_ablation_takes_only_new_sessions(pm, tmp_path):
+    pm["ablation.share"] = 1.0
+    hooks.on_pre_llm_call(session_id="s1", turn_id="t", user_message="Merge it", platform="cli", model="m",
+                          is_first_turn=False)  # a chat with history, first seen after a restart
+    hooks.on_session_end(session_id="s1", completed=True)
+    turn("Please merge my pull request", session="s2")
+    assert [r["arm"] for r in records(tmp_path)] == ["normal", "ablation"]
+
+
 def test_an_ablation_set_while_hermes_runs_waits_for_a_restart(pm, tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(hooks, "ablation_ready", False)  # Hermes loaded the plugin before the ablation was set
     pm["ablation.share"] = 1.0
@@ -324,7 +333,7 @@ def test_register_wires_the_hooks_the_manifest_names(tmp_path, monkeypatch):
     polymetis.register(ctx)
     manifest = yaml.safe_load((Path(polymetis.__file__).parent / "plugin.yaml").read_text(encoding="utf-8"))
     assert sorted(ctx.hooks) == sorted(manifest["provides_hooks"])
-    assert ctx.middleware == {} and hooks.ablation_ready is False  # Hermes copies every request per middleware
+    assert ctx.middleware == {} and hooks.ablation_ready is False  # Hermes copies every request while one is registered
     assert set(ctx.commands) == {"polymetis"} and hooks.log_path() == tmp_path / "pd" / log.NAME
     assert sys.modules["polytropos_router_hooks"].local_request["polymetis"] is hooks.shape_local
     during = FakeCtx(tmp_path / "pd", {"ablation.share": 0.25})
