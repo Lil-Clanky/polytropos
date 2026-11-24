@@ -248,8 +248,10 @@ def install(p: Program, run=run_command, *, download: Callable[[str, Path], None
         if cmd[1:] == ["init", "--agent", "hermes"] and hermes_home:  # rtk writes to $HERMES_HOME, else ~/.hermes
             env = {**os.environ, "HERMES_HOME": str(hermes_home)}
         if cmd[-1] == "setup-opencode":
-            from .freellm import api_key  # here, because freellm imports this module
+            from .freellm import PORT, api_key  # here, because freellm imports this module
 
+            # The CLI looks for FreeLLMAPI at FREELLMAPI_URL, or http://localhost:3001 (cli/src/index.ts)
+            env["FREELLMAPI_URL"] = f"http://127.0.0.1:{PORT}"
             if key := api_key():  # FreeLLMAPI's own CLI reads FreeLLMAPI's key, and asks for it without one
                 env["FREELLMAPI_API_KEY"] = key
         run(cmd, check=True, env=env)

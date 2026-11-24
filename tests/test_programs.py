@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from polytropos import programs as P
+from polytropos.freellm import PORT
 from polytropos.state import State, save_state, use_shared
 
 LOCK = P.load_lock(Path(__file__).resolve().parent.parent / "versions.lock")
@@ -213,6 +214,8 @@ def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch):
         assert env["HTTPS_PROXY"] == "http://proxy.test:3128" and env["ASDF_DATA_DIR"] == "/tmp/asdf"
     assert "FREELLMAPI_API_KEY" not in envs["npm"] and "FREELLMAPI_API_KEY" not in envs["uv"]
     assert envs["npx"]["FREELLMAPI_API_KEY"] == "sk-freellmapi-test-key"  # only FreeLLMAPI's setup-opencode gets it
+    assert envs["npx"]["FREELLMAPI_URL"] == f"http://127.0.0.1:{PORT}"  # 31415 on Windows, its default is 3001
+    assert "FREELLMAPI_URL" not in envs["npm"]
     assert envs["hermes"] is None and envs["graphify"] is None  # these work on the profile with Hermes's environment
 
 
