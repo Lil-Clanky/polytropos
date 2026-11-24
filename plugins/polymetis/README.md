@@ -86,7 +86,7 @@ While a plugin has an `llm_request` middleware, Hermes deep-copies every request
 
 Polymetis writes only in the data folder that Hermes gives it in the profile, `<HERMES_HOME>/plugin-data/agent-plugin-polymetis-1717164d/`, and only while `log` is on. The report ends with the log's path. Both files have mode 0600.
 
-- `decisions.jsonl`: one line per turn. At 5 MB it moves to `decisions.jsonl.1`, which replaces the older one.
+- `decisions.jsonl`: one line per turn, written when Hermes ends the turn with its `on_session_end` hook. Hermes's `codex_app_server` mode ends a turn without that hook, so there the log gets a line only for a turn in progress when the CLI or TUI closes. At 5 MB it moves to `decisions.jsonl.1`, which replaces the older one.
 - `index-<platform>.json`: the names, categories and descriptions of the skills in the last index that Hermes sent on that platform. With it, the first turn of a new session can be ranked before Hermes sends that session's first request, also after a restart.
 
 A line of `decisions.jsonl` has these fields.

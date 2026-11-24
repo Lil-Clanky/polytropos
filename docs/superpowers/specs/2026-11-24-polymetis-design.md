@@ -130,7 +130,8 @@ last one.
 ## Log
 
 `decisions.jsonl` in the plugin's data folder (`<HERMES_HOME>/plugin-data/agent-plugin-polymetis-1717164d/`), mode 0600,
-one line per turn, rotated to `decisions.jsonl.1` above 5 MB. It holds names, numbers and reasons,
+one line per turn, written at `on_session_end` (which Hermes's `codex_app_server` mode skips), rotated
+to `decisions.jsonl.1` above 5 MB. It holds names, numbers and reasons,
 never message text:
 
 `time`, `session` (12 hex characters of a SHA-256 of the session id), `turn`, `platform`,
