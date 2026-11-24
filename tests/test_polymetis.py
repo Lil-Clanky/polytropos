@@ -109,7 +109,8 @@ def test_strip_hints():
 
 def test_word_forms_meet():
     assert {search._stem(w) for w in ("merge", "merges", "merging", "merged")} == {"merg"}
-    assert search._stem("notes") != search._stem("not")
+    assert search._stem("remind") == search._stem("reminders") == "remind"
+    assert search._stem("notes") != search._stem("not") and search._stem("user") == "user"
 
 
 def test_rank_puts_the_matching_skill_first():

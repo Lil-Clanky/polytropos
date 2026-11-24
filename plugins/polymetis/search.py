@@ -20,12 +20,14 @@ nog of om onze ook op te tot u van voor wat wie wil zijn
 
 
 def _stem(word: str) -> str:
-    # shortcut: a few English suffixes only, so that "merges", "merging" and "merge" meet; a real
-    # stemmer is the upgrade when the offline evaluation shows misses on word forms
+    # shortcut: a few English suffixes only, so that "merges", "merging" and "merge" meet, and "remind"
+    # and "reminders"; a real stemmer is the upgrade when evals/polymetis shows misses on word forms
     for suffix, keep in (("ing", 4), ("ed", 4), ("s", 3)):
         if word.endswith(suffix) and len(word) - len(suffix) >= keep:
             word = word[:-len(suffix)]
             break
+    if word.endswith("er") and len(word) >= 6:
+        word = word[:-2]
     return word[:-1] if len(word) >= 5 and word.endswith("e") else word
 
 

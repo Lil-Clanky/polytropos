@@ -13,7 +13,7 @@ DEFAULT_LOCAL_TOOLS = ("clarify", "memory", "read_file", "search_files", "termin
 class Settings:
     apply: frozenset[str] = frozenset()  # empty: shadow mode, decide and log only
     log: bool = True
-    min_score: float = 4.0
+    min_score: float = 5.0  # from evals/polymetis: few wrong tips at 44 to 185 skills
     max_tips: int = 2
     pin: tuple[str, ...] = ()
     block: frozenset[str] = frozenset()

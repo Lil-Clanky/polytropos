@@ -159,7 +159,7 @@ makes no network calls. The log holds skill and tool names, scores, counts and r
 
 ## Evaluation
 
-1. **Offline, now.** `evals/polymetis/`: 40 tasks in English and Dutch with the skills they need
+1. **Offline, now.** `evals/polymetis/`: 48 tasks in English and Dutch with the skills they need
    (or none), over Hermes's 44 bundled skills, with 0, 50 and 141 extra distractor skills from
    Hermes's optional skills. Measures recall@1/3/10, how often a no-skill task stays below
    `min_score`, and the effect of the distractors. A test keeps the numbers from falling.
