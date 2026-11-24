@@ -116,6 +116,7 @@ def test_pack_file_pins_and_config():
     assert [(p["repo"], p.get("subdir")) for p in plugins] == [
         ("Lil-Clanky/polytropos", "plugins/polytropos"),
         ("Lil-Clanky/polytropos", "plugins/polytropos_router"),
+        ("Lil-Clanky/polymetis", None),
         ("DietrichGebert/ponytail", None),
         ("obra/superpowers", None),
     ]

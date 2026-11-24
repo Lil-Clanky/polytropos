@@ -155,7 +155,7 @@ The command prints one line per model. It exits with status 1 when a model fails
 - It undoes the integrations that `install` recorded for this profile. Hermes skills go with `hermes skills uninstall <name> --yes`, and rtk's Hermes plugin with `~/.local/bin/rtk init --agent hermes --uninstall`. The context7 MCP entry is restored with the other config changes. graphify writes its skill to `~/.hermes/skills/graphify/` whatever the profile, so uninstall deletes that folder only in the default profile and prints its path in the others. FreeLLMAPI's `setup-opencode` added its provider and a default model to OpenCode's config and stored FreeLLMAPI's key under `freellmapi` in `$XDG_DATA_HOME/opencode/auth.json`. Uninstall prints both paths and leaves those changes to you. When an undo command fails, uninstall prints the command and keeps the record.
 - It drops this profile from each shared part. When no other profile uses a part and Polytropos installed it, uninstall removes it. For FreeLLMAPI that is the service, `releases/` and the `current` link. Programs go with `uv tool uninstall`, `npm uninstall -g`, or by deleting their files in `~/.local` for rtk and the macOS Ollama. Ollama on Linux and Windows came from Ollama's install script, and uninstall asks you to remove it yourself. On Windows the desktop app is FreeLLMAPI, and uninstall leaves it.
 - With `--purge-data` it asks `Type yes to delete <path> with FreeLLMAPI's database, keys and backups: ` and deletes `~/.local/share/polytropos/freellmapi` after `yes`. While another profile still uses FreeLLMAPI, the folder stays. Without the option, uninstall prints where the data stays.
-- Last, it prints `hermes plugins remove <name>` for each pack plugin in the profile (`polytropos-router`, `ponytail`, `superpowers` and `polytropos`) and asks you to restart the gateway with `hermes gateway restart`.
+- Last, it prints `hermes plugins remove <name>` for each pack plugin in the profile (`polytropos-router`, `polymetis`, `ponytail`, `superpowers` and `polytropos`) and asks you to restart the gateway with `hermes gateway restart`.
 
 Uninstall exits with status 1 when a restore, an undo or the removal of a shared part failed. It keeps the record of what failed, so the next uninstall tries again.
 
@@ -193,7 +193,7 @@ With `context_window: 8192`, a request fits when its estimate is at most 7168 to
 
 ### Request hooks for local models
 
-Another plugin can change the request that a local model gets, for example to leave out tools and skills so that it fits a small window. [Polymetis](../plugins/polymetis/README.md) does this. A plugin registers a hook in the dict `local_request` of a module named `polytropos_router_hooks` in `sys.modules`, which the first plugin that registers creates:
+Another plugin can change the request that a local model gets, for example to leave out tools and skills so that it fits a small window. [Polymetis](https://github.com/Lil-Clanky/polymetis) does this. A plugin registers a hook in the dict `local_request` of a module named `polytropos_router_hooks` in `sys.modules`, which the first plugin that registers creates:
 
 ```python
 import sys, types
@@ -346,7 +346,7 @@ It reads three variables from the gateway's environment, which Hermes loads from
 
 ### Polymetis
 
-Polymetis reads its settings from `plugins.entries.polymetis.settings` in `config.yaml`, at the start of every turn. With the defaults it only decides and logs. An ablation starts when Hermes next loads the plugin, as after a restart of Hermes or the gateway, because Polymetis adds the middleware it needs then. The keys, the log fields and the report are in [plugins/polymetis/README.md](../plugins/polymetis/README.md).
+Polymetis reads its settings from `plugins.entries.polymetis.settings` in `config.yaml`, at the start of every turn. With the defaults it only decides and logs. An ablation starts when Hermes next loads the plugin, as after a restart of Hermes or the gateway, because Polymetis adds the middleware it needs then. The keys, the log fields and the report are in [Polymetis's README](https://github.com/Lil-Clanky/polymetis).
 
 ## Memory guard
 
@@ -497,7 +497,7 @@ The file holds no B6 cells and no results of `--openai-endpoint` runs. Polytropo
 |---|---|
 | `~/.hermes/config.yaml` | Hermes settings. The router reads `plugins.entries.polytropos-router`, and the polytropos plugin reads `plugins.entries.polytropos.settings`. |
 | `~/.hermes/.env` | `FREELLMAPI_API_KEY`, written by `hermes config set FREELLMAPI_API_KEY <key>` |
-| `~/.hermes/plugins/polytropos/`, `polytropos-router/`, `superpowers/`, `ponytail/` | The pack plugins |
+| `~/.hermes/plugins/polytropos/`, `polytropos-router/`, `polymetis/`, `superpowers/`, `ponytail/` | The pack plugins |
 | `~/.hermes/plugins/polytropos/versions.lock` | The copy of `versions.lock` that the commands read |
 | `~/.hermes/plugins/.install-metadata.json` | Hermes's install records, which the doctor reads |
 | `~/.hermes/plugins/whatsapp-human-pace/` | whatsapp-human-pace with its `settings.json` and `pending.json`, when installed |
@@ -589,6 +589,8 @@ A release takes two commits, because the pack file can only pin a commit that al
 2. Run `python scripts/release.py`. It sets the `ref` of each `Lil-Clanky/polytropos` entry in `hermes-pack.yaml` to that commit, which is `git rev-parse HEAD` unless you pass `--sha <commit>`. `--repo` picks another repository. The script rewrites the `ref` lines only, and exits with status 1 when no entry matched.
 3. Commit the pack file, tag this second commit and publish a GitHub release for the tag.
 4. For the Hermes plugin catalog, open a pull request on `NousResearch/hermes-agent` that sets `sha` and `version` in `plugin-catalog/polytropos.yaml` and in `plugin-catalog/polytropos-router.yaml` to the code commit from step 1. A maintainer reviews the commits between the old and the new pin before the catalog moves.
+
+The pack pins Polymetis to a commit of its own repository, `Lil-Clanky/polymetis`. Move that pin with `python scripts/release.py --repo Lil-Clanky/polymetis --sha <commit>` before step 3.
 
 ### Pins
 

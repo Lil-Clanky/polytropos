@@ -17,6 +17,7 @@ Every command, setting and path is listed in [docs/reference.md](docs/reference.
 |---|---|---|
 | polytropos, polytropos-router | The two plugins above | The pack |
 | superpowers | Hermes plugin with a set of working skills | The pack |
+| polymetis | Hermes plugin that decides per session which skills a model gets, see [Polymetis](#polymetis) | The pack |
 | ponytail | Hermes plugin for shorter replies and smaller code changes | `hermes polytropos install` |
 | FreeLLMAPI | Local server that pools the free tiers of many model providers behind one OpenAI-compatible API | `hermes polytropos install` |
 | rtk | Compresses command output to save tokens | `hermes polytropos install` |
@@ -107,7 +108,7 @@ hermes plugins install polytropos
 hermes plugins install polytropos-router
 ```
 
-Hermes installs each one at the commit the catalog pins and does not stop at a caution verdict of its scan, because a maintainer read the code at that commit. superpowers comes with the pack only. Then continue with `hermes polytropos doctor` as above.
+Hermes installs each one at the commit the catalog pins and does not stop at a caution verdict of its scan, because a maintainer read the code at that commit. superpowers comes with the pack only, and polymetis installs on its own as described under [Polymetis](#polymetis). Then continue with `hermes polytropos doctor` as above.
 
 ### The FreeLLMAPI key
 
@@ -206,13 +207,15 @@ Hermes asks whether to enable it, and the default answer is no. From the termina
 
 ## Polymetis
 
-The repository also holds `polymetis`, a plugin that decides per session which of Hermes's skills a model gets. It ranks the skills in Hermes's skill index against each message, on this machine and without a model, and logs what it decided without message text. By default it changes nothing that a model gets. Turned on, it adds a short tip that names the matching skill, and it gives local models behind `polytropos-router` a smaller request with fewer tools and skills. `hermes polymetis report` shows what it decided and which skills the models loaded. The plugin is not part of the pack and needs no other part of Polytropos. Install it on its own with
+`polymetis` is a plugin that decides per session which of Hermes's skills a model gets. It ranks the skills in Hermes's skill index against each message, on this machine and without a model, and logs what it decided without message text. By default it changes nothing that a model gets. Turned on, it adds a short tip that names the matching skill, and it gives local models behind `polytropos-router` a smaller request with fewer tools and skills. `hermes polymetis report` shows what it decided and which skills the models loaded.
+
+Polymetis has its own repository, [Lil-Clanky/polymetis](https://github.com/Lil-Clanky/polymetis), whose README describes its settings, files and report. The pack installs and enables it with its default settings, so it only decides and logs. It needs no other part of Polytropos and also installs on its own:
 
 ```sh
-hermes plugins install Lil-Clanky/polytropos/plugins/polymetis
+hermes plugins install Lil-Clanky/polymetis
 ```
 
-Hermes asks whether to enable it, and the default answer is no. Its settings, files and report are described in [plugins/polymetis/README.md](plugins/polymetis/README.md).
+Hermes then asks whether to enable it, and the default answer is no.
 
 ## Development
 
