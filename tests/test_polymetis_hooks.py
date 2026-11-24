@@ -13,7 +13,7 @@ import yaml
 from polymetis_data import INDEX, TOOLS
 
 import polymetis
-from polymetis import catalog, cli, hooks, log, sessions
+from polymetis import catalog, cli, decide, hooks, log, sessions
 from polymetis.config import Settings
 
 SECRET = "zebracornflakes"  # a word that must never reach a file
@@ -163,6 +163,20 @@ def test_an_ablation_takes_only_new_sessions(pm, tmp_path):
     hooks.on_session_end(session_id="s1", completed=True)
     turn("Please merge my pull request", session="s2")
     assert [r["arm"] for r in records(tmp_path)] == [None, "ablation"]
+
+
+def test_a_subagent_takes_its_parents_group(pm, tmp_path):
+    pm["ablation.share"] = 0.5
+    s = hooks._refresh_settings()
+    parent = next(f"chat-{i}" for i in range(100) if decide.arm(s, f"chat-{i}") == "ablation")
+    child = next(f"sub-{i}" for i in range(100) if decide.arm(s, f"sub-{i}") == "normal")
+    turn("Please merge my pull request", session=parent)
+    for sub, of in ((child, parent), ("orphan", "a chat Polymetis does not know")):
+        hooks.on_pre_llm_call(session_id=sub, turn_id="t", user_message="Merge it", platform="cli", model="m",
+                              is_first_turn=True, parent_session_id=of)
+        hooks.on_session_end(session_id=sub, completed=True)
+    assert [(r["arm"], r["level_reason"]) for r in records(tmp_path)][:2] == [("ablation", "ablation")] * 2
+    assert records(tmp_path)[2]["arm"] is None
 
 
 def test_an_ablation_set_while_hermes_runs_waits_for_a_restart(pm, tmp_path, monkeypatch, caplog):

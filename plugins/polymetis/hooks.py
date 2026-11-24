@@ -164,7 +164,7 @@ def _search(s: Settings, session: Session, turn: Turn) -> None:
 
 @_safe
 def on_pre_llm_call(session_id: str = "", turn_id: str = "", user_message: Any = None, platform: str = "",
-                    model: str = "", is_first_turn: Any = None, **kwargs) -> dict | None:
+                    model: str = "", is_first_turn: Any = None, parent_session_id: Any = "", **kwargs) -> dict | None:
     if not session_id:
         return None
     s = _refresh_settings()
@@ -173,9 +173,11 @@ def on_pre_llm_call(session_id: str = "", turn_id: str = "", user_message: Any =
     with STORE.lock:
         session = STORE.get(session_id)
         if session is None:
-            # only a new chat gets a group: one that Polymetis first sees later, as after a restart, may have
-            # used its skills already
-            arm = decide.arm(s, session_id) if ablation_ready and is_first_turn else None
+            if parent_session_id:  # a subagent that delegate_task started: its parent's group, if Polymetis knows it
+                parent = STORE.get(parent_session_id)
+                arm = parent.arm if parent is not None else None
+            else:  # only a new chat gets a group: one that Polymetis first sees later may have used its skills
+                arm = decide.arm(s, session_id) if ablation_ready and is_first_turn else None
             session = STORE.add(session_id, Session(key=decide.session_key(session_id), platform=platform or "",
                                                     model=model or "", arm=arm))
             if session.arm == "ablation":  # known before any index: the middleware removes it
