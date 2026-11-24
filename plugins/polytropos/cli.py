@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 from . import doctor, programs
 from ._shared import canary, paths
-from .freellm import DESKTOP_PORT, PORT, REPO_URL, FreeLLM, Pin, PortBusy, _default_get
+from .freellm import DESKTOP_PORT, PORT, REPO_URL, FreeLLM, Pin, PortBusy, _default_get, secret
 from .services import ServiceManager
 from .state import (State, config_changes, load_state, record_config_change, release_shared, save_state, set_mode,
                     use_shared)
@@ -563,7 +563,7 @@ def _undo_integration(item: dict, home: Path, fx: Effects) -> bool:
         command = ["hermes", "skills", "uninstall", added.name, "--yes"]
     elif ran[1:] == ["init", "--agent", "hermes"]:
         command = [*ran, "--uninstall"]  # rtk's own undo removes its Hermes plugin and its config entry
-        env = {**os.environ, "HERMES_HOME": str(home)}  # rtk works on $HERMES_HOME, else on ~/.hermes
+        env = {**programs.child_env(), "HERMES_HOME": str(home)}  # rtk works on $HERMES_HOME, else on ~/.hermes
     elif added.is_relative_to(home):
         shutil.rmtree(added, ignore_errors=True)
         return True
@@ -688,8 +688,11 @@ def run_canary(cfg: "RouterConfig", *, run=programs.run_command, models: list[st
             for name in names:
                 argv += ["--model", name]
             argv += ["--attempts", "1", "--summary-json", str(summary)]
+            env = programs.child_env()  # plus, of all keys, only the one this upstream names
+            if up.api_key_env and (key := secret(up.api_key_env)):
+                env[up.api_key_env] = key
             try:
-                run(argv, check=False, cwd=tmp)
+                run(argv, check=False, cwd=tmp, env=env)
             except FileNotFoundError:
                 print("stack-canary is not installed, so nothing was tested. "
                       "Install it with: hermes polytropos install")

@@ -26,11 +26,14 @@ ROUTER = {
 
 FAKE_CANARY = """#!{python}
 import json, os, sys
+here = os.path.dirname(os.path.abspath(__file__))  # its settings: Polytropos passes it no FAKE_* variable
 args = sys.argv[1:]
-with open(os.environ["FAKE_CANARY_LOG"], "a") as log:
-    log.write(json.dumps({{"argv": args, "key_set": os.environ.get("FREELLMAPI_API_KEY") == "{secret}"}}) + "\\n")
+with open(os.path.join(here, "calls.jsonl"), "a") as log:
+    log.write(json.dumps({{"argv": args, "key_set": os.environ.get("FREELLMAPI_API_KEY") == "{secret}",
+                           "provider_key_seen": "OPENAI_API_KEY" in os.environ}}) + "\\n")
 models = [args[i + 1] for i, a in enumerate(args) if a == "--model"]
-failing = os.environ.get("FAKE_CANARY_FAIL", "").split(",")
+fail = os.path.join(here, "fail")
+failing = open(fail).read().split(",") if os.path.exists(fail) else []
 rows = [{{"model": m, "check": c, "status": "fail" if m in failing and c == "A3" else "pass", "passed": 1,
           "attempts": 1}} for m in models for c in ("A1", "A2", "A3", "A4", "A5", "A6")]
 with open(args[args.index("--summary-json") + 1], "w") as f:
@@ -47,10 +50,10 @@ def fake_canary(tmp_home, monkeypatch):
     script.chmod(0o755)
     if sys.platform == "win32":  # no shebangs there: a .bat that run_command finds through PATHEXT starts the script
         (bin_dir / "canary.bat").write_text(f'@"{sys.executable}" "{script}" %*\n')
-    log = tmp_home / "canary-calls.jsonl"
+    log = bin_dir / "calls.jsonl"
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("FAKE_CANARY_LOG", str(log))
     monkeypatch.setenv("FREELLMAPI_API_KEY", SECRET)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")  # a provider key that must not reach it
     return lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
@@ -70,7 +73,7 @@ def test_run_canary_saves_results_for_loopback_cloud_models(fake_canary, capsys)
     assert argv[:9] == ["run", "--openai-endpoint", "http://127.0.0.1:43001/v1", "--api-key-env", "FREELLMAPI_API_KEY",
                         "--model", "auto", "--model", "big"]
     assert argv[9:12] == ["--attempts", "1", "--summary-json"]
-    assert call["key_set"] and SECRET not in json.dumps(argv)
+    assert call["key_set"] and not call["provider_key_seen"] and SECRET not in json.dumps(argv)
     assert "remote" in capsys.readouterr().out
 
 
@@ -84,7 +87,7 @@ def test_canary_run_command_exits_1_when_a_model_fails(tmp_home, fake_canary, mo
     parser = argparse.ArgumentParser()
     cli.setup_parser(parser)
     assert cli.handle(parser.parse_args(["canary", "run"])) == 0
-    monkeypatch.setenv("FAKE_CANARY_FAIL", "big")
+    (tmp_home / "bin" / "fail").write_text("big")
     assert cli.handle(parser.parse_args(["canary", "run"])) == 1
     out = capsys.readouterr().out
     assert "fail" in out and "freellmapi/big" in out and SECRET not in out
@@ -141,6 +144,6 @@ def test_update_stands_when_stack_canary_is_missing_and_says_why(tmp_home, capsy
 
 
 def test_update_rolls_back_when_the_canary_fails(tmp_home, fake_canary, monkeypatch, capsys):
-    monkeypatch.setenv("FAKE_CANARY_FAIL", "auto")
+    (tmp_home / "bin" / "fail").write_text("auto")
     code, fl = update_freellmapi(tmp_home)
     assert code == 1 and fl.checks == [False] and "restored v0.16.35" in capsys.readouterr().out

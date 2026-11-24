@@ -20,7 +20,8 @@ import tomllib
 from .state import load_state
 
 _VERSION = re.compile(r"\d+\.\d+\.\d+")
-# npm and uv run the scripts of the packages they install, so they get only what they need, not Hermes's provider keys.
+# Third-party programs get only what they need, not Hermes's provider keys: npm and uv run the scripts of the packages
+# they install, and rtk, graphify and stack-canary are downloaded tools. Hermes itself, the host, keeps its environment.
 _ENV_NAMES = {"PATH", "HOME", "USER", "LOGNAME", "TERM", "LANG", "LANGUAGE", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY",
               "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
               "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NVM_DIR", "VOLTA_HOME",
@@ -50,7 +51,8 @@ class Program:
 
 
 def child_env() -> dict[str, str]:
-    """The environment for npm, npx and uv: paths, locale, proxies, CA certificates and their own settings."""
+    """The environment for the programs Polytropos starts: paths, locale, proxies, CA certificates and the settings of
+    npm, uv and the Node version managers."""
     return {k: v for k, v in os.environ.items() if k.upper() in _ENV_NAMES or k.upper().startswith(_ENV_PREFIXES)}
 
 
@@ -125,7 +127,7 @@ def programs(lock: dict, *, platform: str, machine: str) -> list[Program]:
 
 def installed_version(p: Program, run=run_command) -> str | None:
     try:
-        r = run(p.version_cmd, capture_output=True, text=True, timeout=30)
+        r = run(p.version_cmd, capture_output=True, text=True, timeout=30, env=child_env())
     except (OSError, subprocess.TimeoutExpired):  # missing, or present but not runnable
         return None
     if p.name == "stack-canary":  # a working `canary run` and the commit on record, "" when there is no record
@@ -256,9 +258,9 @@ def install(p: Program, run=run_command, *, download: Callable[[str, Path], None
             if not ok:
                 print(f"The MCP server {cmd[3]} was not added. To add it, run: " + " ".join(cmd))
             continue
-        env = child_env() if cmd[0] in ("npm", "npx", "uv") else None
+        env = None if cmd[0] == "hermes" else child_env()  # Hermes is the host and keeps its own environment
         if cmd[1:] == ["init", "--agent", "hermes"] and hermes_home:  # rtk writes to $HERMES_HOME, else ~/.hermes
-            env = {**os.environ, "HERMES_HOME": str(hermes_home)}
+            env["HERMES_HOME"] = str(hermes_home)
         if cmd[-1] == "setup-opencode":
             from .freellm import PORT, api_key  # here, because freellm imports this module
 
