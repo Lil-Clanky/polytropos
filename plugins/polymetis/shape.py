@@ -65,11 +65,13 @@ def variant(request: dict, level: str, *, skills=(), local_tools=()) -> dict:
 def without_skills(request: dict) -> dict:
     """The request with every tool except the skill tools, and without the index or its pointers, in each
     format Hermes sends: the system prompt as a ``system`` or ``developer`` message (chat completions), as
-    a top-level ``system`` (Anthropic, Bedrock) or as ``instructions`` (the Responses API), and the tools
-    as ``tools`` or Bedrock's ``toolConfig``. It changes only the keys the request has."""
+    a top-level ``system`` (Anthropic, Bedrock), or as ``instructions`` or a developer item in ``input``
+    (the Responses API), and the tools as ``tools`` or Bedrock's ``toolConfig``. It changes only the keys
+    the request has."""
     out = dict(request)
-    if isinstance(out.get("messages"), list):
-        out["messages"] = _messages(out["messages"], strip_skills)
+    for key in ("messages", "input"):
+        if isinstance(out.get(key), list):
+            out[key] = _messages(out[key], strip_skills)
     for key in ("system", "instructions"):
         if key in out:
             out[key] = _edit_text(out[key], strip_skills)

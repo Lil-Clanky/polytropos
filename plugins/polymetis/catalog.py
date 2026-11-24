@@ -27,9 +27,10 @@ class Skill:
 
 
 def is_text_part(part) -> bool:
-    """A text part of a message: ``{"type": "text", "text": ...}`` as OpenAI and Anthropic send it, or
-    Bedrock's ``{"text": ...}``."""
-    return isinstance(part, dict) and isinstance(part.get("text"), str) and part.get("type", "text") == "text"
+    """A text part of a message: ``{"type": "text", "text": ...}`` as OpenAI and Anthropic send it,
+    ``input_text`` in the Responses API, or Bedrock's ``{"text": ...}``."""
+    return isinstance(part, dict) and isinstance(part.get("text"), str) and \
+        part.get("type", "text") in ("text", "input_text")
 
 
 def text_of(content) -> str:

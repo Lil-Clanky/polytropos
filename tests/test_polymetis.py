@@ -108,8 +108,9 @@ def test_keep_skills_with_no_match_strips_the_index():
 
 def test_text_of_joins_text_parts_only():
     parts = [{"type": "text", "text": "a"}, {"type": "image_url", "image_url": {"url": "x"}},
-             {"text": "b"}, {"cachePoint": {"type": "default"}}]  # the last two as Bedrock sends them
-    assert catalog.text_of(parts) == "a\nb" and catalog.text_of(None) == ""
+             {"text": "b"}, {"cachePoint": {"type": "default"}},  # these two as Bedrock sends them
+             {"type": "input_text", "text": "c"}]  # as the Responses API takes it
+    assert catalog.text_of(parts) == "a\nb\nc" and catalog.text_of(None) == ""
 
 
 def test_strip_hints():
@@ -274,6 +275,12 @@ def test_without_skills_reads_each_format_hermes_sends():
                       "tools": [{"name": n, "input_schema": {}} for n in tool_names]},
         "responses": {"instructions": INDEX, "input": [{"role": "user", "content": "hi"}],
                       "tools": [{"type": "function", "name": n} for n in tool_names]},
+        # GPT-6.2 and newer: Hermes moves the system prompt into a developer item at the start of input
+        "responses_developer": {"input": [{"type": "message", "role": "developer",
+                                           "content": [{"type": "input_text", "text": INDEX}]},
+                                          {"type": "message", "role": "user",
+                                           "content": [{"type": "input_text", "text": "hi"}]}],
+                                "tools": [{"type": "function", "name": n} for n in tool_names]},
         "bedrock": {"system": [{"text": INDEX}, cache], "messages": [{"role": "user", "content": [{"text": "hi"}]}],
                     "toolConfig": {"tools": [{"toolSpec": {"name": n}} for n in tool_names] + [cache]}},
         "developer": {"messages": [{"role": "developer", "content": INDEX}, {"role": "user", "content": "hi"}],
