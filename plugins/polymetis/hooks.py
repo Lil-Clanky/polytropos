@@ -168,14 +168,17 @@ def on_pre_llm_call(session_id: str = "", turn_id: str = "", user_message: Any =
     with STORE.lock:
         session = STORE.get(session_id)
         if session is None:
-            # only a new chat: one Polymetis first sees later, as after a restart, already used its skills
-            arm = decide.arm(s, session_id) if ablation_ready and is_first_turn else "normal"
+            # only a new chat gets a group: one that Polymetis first sees later, as after a restart, may have
+            # used its skills already
+            arm = decide.arm(s, session_id) if ablation_ready and is_first_turn else None
             session = STORE.add(session_id, Session(key=decide.session_key(session_id), platform=platform or "",
                                                     model=model or "", arm=arm))
             if session.arm == "ablation":  # known before any index: the middleware removes it
                 session.level, session.level_reason = "none", "ablation"
-        elif session.arm == "ablation" and not s.ablation_active():  # it ended: the skills come back
-            session.arm, session.level, session.level_reason = "normal", None, ""
+        elif session.arm and not s.ablation_active():  # it ended for both groups, and the skills come back
+            if session.arm == "ablation":
+                session.level, session.level_reason = None, ""
+            session.arm = None
         text = text_of(user_message)
         session.turns += 1
         session.text = text

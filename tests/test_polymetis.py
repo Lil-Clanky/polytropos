@@ -170,10 +170,10 @@ def test_chosen_for_session_puts_pins_in_the_index_first():
 
 
 def test_arm_follows_the_share_and_the_end_date():
-    assert decide.arm(settings()[0], "s") == "normal"
+    assert decide.arm(settings()[0], "s") is None
     assert decide.arm(settings(**{"ablation.share": 1.0})[0], "s") == "ablation"
     ended, _ = settings(**{"ablation.share": 1.0, "ablation.until": "2020-01-01"})
-    assert decide.arm(ended, "s") == "normal"
+    assert decide.arm(ended, "s") is None
     half, _ = settings(**{"ablation.share": 0.5})
     arms = [decide.arm(half, f"session-{i}") for i in range(400)]
     assert 140 < arms.count("ablation") < 260 and decide.arm(half, "session-7") == arms[7]
@@ -366,15 +366,16 @@ def test_report_compares_the_ablation_arm():
     assert "Proposal: run an ablation week" not in out and "Left out" not in out
 
 
-def test_report_leaves_out_sessions_that_changed_group_and_turns_it_did_not_see():
+def test_report_compares_chats_up_to_when_they_left_their_group():
     records = [rec(1, session="a"), rec(1, session="b", arm="ablation", level="none"),
-               rec(1, session="c", arm="ablation", level="none"), rec(1, session="c", turn=2),  # the ablation ended
-               rec(1, session="d", arm="ablation", level="none", api_calls=0)]  # as in codex_app_server mode
+               rec(1, session="c", arm="ablation", level="none"), rec(1, session="c", turn=2, arm=None),  # it ended
+               rec(1, session="d", arm=None),  # a chat that started before the ablation, or ran across a restart
+               rec(1, session="e", arm="ablation", level="none", api_calls=0)]  # no request that Polymetis saw
     out = report.render(records, now=NOW)
-    rows = {line.split()[0]: line.split()[1:3] for line in out.splitlines() if line.startswith("  normal")
-            or line.startswith("  ablation")}
-    assert rows == {"normal": ["1", "1"], "ablation": ["1", "1"]}
-    assert "Left out: 1 sessions that changed group, and 1 turns without a request that Polymetis saw." in out
+    rows = {line.split()[0]: line.split()[1:3] for line in out.splitlines()
+            if line.startswith(("  normal", "  ablation"))}
+    assert rows == {"normal": ["1", "1"], "ablation": ["2", "2"]}
+    assert "Left out: 1 turns without a request that Polymetis saw." in out
 
 
 def test_report_proposes_an_ablation_week_for_a_new_model():

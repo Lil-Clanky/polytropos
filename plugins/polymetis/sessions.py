@@ -41,7 +41,7 @@ class Session:
     platform: str = ""
     provider: str = ""
     model: str = ""
-    arm: str = "normal"
+    arm: str | None = None  # the group of a chat that started while an ablation ran, until it leaves it
     level: str | None = None  # None until a skill index was seen
     level_reason: str = ""
     upgraded: bool = False

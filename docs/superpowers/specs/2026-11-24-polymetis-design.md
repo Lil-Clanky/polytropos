@@ -112,15 +112,20 @@ turn, so they would be an opt-in of their own.
 With `ablation.share` above 0 and before `ablation.until`, that share of new sessions runs without
 skills: an `llm_request` middleware removes the skill index, the pointers to `skill_view` and the
 skill tools (`skills_list`, `skill_view`, `skill_manage`) from the requests of the session's turns, in
-the formats of chat completions, Anthropic, the Responses API and Bedrock. A session is new when it has
-no history; one first seen on a later turn, as after a restart, stays normal. While an `llm_request`
+the formats of chat completions, Anthropic, the Responses API and Bedrock. While an `llm_request`
 middleware is registered, Hermes deep-copies every request several times, so Polymetis registers it
 only when an ablation is set while Hermes loads the plugin; a new ablation starts when Hermes next
-loads it, and an ended one gives its sessions their skills back from the next turn. The log marks
-those sessions `arm: ablation`, and the report compares both arms, leaving out sessions that changed
-arm and turns without a request that Polymetis saw, as in Hermes's `codex_app_server` mode. The
-report proposes an ablation when a model it has not seen before shows up in the log, or 90 days after
-the last one.
+loads it, and an ended one gives its sessions their skills back from the next turn.
+
+Only a session that starts while the ablation runs, with no history yet, gets a group, `ablation` or
+`normal`, which the log records as `arm`. A session leaves its group when the ablation ends or when
+Polymetis loses track of it: after a restart, after a compression that gives it a new session id, or
+when it falls out of the 256 sessions Polymetis keeps. The report compares both groups up to that
+point, so both cover the same part of their sessions, and leaves out turns without a request that
+Polymetis saw. Counting a session first seen later, or a whole session that changed group, would bias
+the comparison: such sessions are long ones, and they would fall into one group only. The report
+proposes an ablation when a model it has not seen before shows up in the log, or 90 days after the
+last one.
 
 ## Log
 

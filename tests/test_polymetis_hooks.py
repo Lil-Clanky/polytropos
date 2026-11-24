@@ -144,15 +144,16 @@ def test_the_ablation_arm_gets_no_skills(pm, tmp_path):
     assert (rec["arm"], rec["level"], rec["level_reason"], rec["tip"]) == ("ablation", "none", "ablation", [])
 
 
-def test_an_ablation_ends_with_its_settings(pm, tmp_path):
-    pm["ablation.share"] = 1.0
+@pytest.mark.parametrize("share, group", [(1.0, ("ablation", "none")), (1e-9, ("normal", "lean"))])
+def test_an_ablation_ends_with_its_settings_for_both_groups(pm, tmp_path, share, group):
+    pm["ablation.share"] = share
     turn("Please merge my pull request")
     pm["ablation.until"] = "2020-01-01"  # its last day has passed
     start("Merge the other pull request too")
     request = {"model": "m", "messages": messages("hi"), "tools": TOOLS}
     assert hooks.on_llm_request(request=request, session_id="s1", turn_id="t") is None
     hooks.on_session_end(session_id="s1", completed=True)
-    assert [(r["arm"], r["level"]) for r in records(tmp_path)] == [("ablation", "none"), ("normal", "lean")]
+    assert [(r["arm"], r["level"]) for r in records(tmp_path)] == [group, (None, "lean")]
 
 
 def test_an_ablation_takes_only_new_sessions(pm, tmp_path):
@@ -161,7 +162,7 @@ def test_an_ablation_takes_only_new_sessions(pm, tmp_path):
                           is_first_turn=False)  # a chat with history, first seen after a restart
     hooks.on_session_end(session_id="s1", completed=True)
     turn("Please merge my pull request", session="s2")
-    assert [r["arm"] for r in records(tmp_path)] == ["normal", "ablation"]
+    assert [r["arm"] for r in records(tmp_path)] == [None, "ablation"]
 
 
 def test_an_ablation_set_while_hermes_runs_waits_for_a_restart(pm, tmp_path, monkeypatch, caplog):
@@ -170,7 +171,7 @@ def test_an_ablation_set_while_hermes_runs_waits_for_a_restart(pm, tmp_path, mon
     hooks._warn_once.cache_clear()
     with caplog.at_level(logging.WARNING, logger="hermes_plugins.polymetis"):
         turn("Please merge my pull request")
-    assert records(tmp_path)[0]["arm"] == "normal" and "restart Hermes" in caplog.text
+    assert records(tmp_path)[0]["arm"] is None and "restart Hermes" in caplog.text
 
 
 def test_middleware_leaves_a_normal_session_alone(pm):

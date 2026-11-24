@@ -17,10 +17,11 @@ def session_key(session_id: str) -> str:
     return hashlib.sha256(session_id.encode()).hexdigest()[:12]
 
 
-def arm(settings: Settings, session_id: str) -> str:
-    """``ablation`` for the configured share of sessions while an ablation runs, else ``normal``."""
+def arm(settings: Settings, session_id: str) -> str | None:
+    """The group of a new chat while an ablation runs: ``ablation`` for the configured share, else
+    ``normal``. ``None`` while no ablation runs."""
     if not settings.ablation_active():
-        return "normal"
+        return None
     bucket = int(hashlib.sha256(b"polymetis-ablation:" + session_id.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
     return "ablation" if bucket < settings.ablation_share else "normal"
 

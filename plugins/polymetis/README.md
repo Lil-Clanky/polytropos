@@ -76,9 +76,9 @@ Only local models get these variants. More requests fit a local model this way, 
 
 ### Ablation
 
-An ablation measures whether skills help. While `ablation.share` is above 0 and `ablation.until` has not passed, that share of new sessions, picked by a hash of the session id, runs without skills. An `llm_request` middleware removes the skill index, the sentences that point at `skill_view`, and the tools `skills_list`, `skill_view` and `skill_manage` from the requests of those sessions' turns. It reads the formats Hermes sends to chat completions, Anthropic, the Responses API and Bedrock; a request in another format keeps its skills. Hermes's `codex_app_server` mode sends no request through the middleware. The log marks these sessions with `arm: ablation`, and the report compares both groups.
+An ablation measures whether skills help. While `ablation.share` is above 0 and `ablation.until` has not passed, that share of new sessions, picked by a hash of the session id, runs without skills. An `llm_request` middleware removes the skill index, the sentences that point at `skill_view`, and the tools `skills_list`, `skill_view` and `skill_manage` from the requests of those sessions' turns. It reads the formats Hermes sends to chat completions, Anthropic, the Responses API and Bedrock; a request in another format keeps its skills. Hermes's `codex_app_server` mode sends no request through the middleware. The log marks these sessions with `arm: ablation` and the other new sessions with `arm: normal`, and the report compares both groups.
 
-A session is new when it has no history yet. A session that Polymetis first sees on a later turn, such as after a restart, stays in the normal group, because it may have loaded skills already.
+Only a session that starts while the ablation runs gets a group: a session is new when it has no history yet. One that Polymetis first sees on a later turn may have used its skills already, so it gets none. A session leaves its group, and has its skills from then on, when the ablation ends or when Polymetis loses track of it: after a restart of Hermes or the gateway, after Hermes compresses the conversation and gives it a new session id, or when it is not among the last 256 sessions that Polymetis saw. Its later turns, like those of every session without a group, have `arm: null`. The report compares both groups up to that point, so both cover the same part of their sessions.
 
 While a plugin has an `llm_request` middleware, Hermes deep-copies every request several times, so Polymetis adds its middleware only when Hermes loads it while an ablation is set. After setting `ablation.share`, restart Hermes or the gateway; until Hermes loads the plugin again, its log says that the ablation waits for a restart. When the ablation ends, by `until` or a `share` of 0, its sessions get their skills back from their next turn.
 
@@ -99,7 +99,7 @@ A line of `decisions.jsonl` has these fields.
 | `platform`, `provider`, `model` | From Hermes's hooks |
 | `answered_by` | The models that the provider reported as answering, at most 3 |
 | `level`, `level_reason` | The session's level, `null` before it has one, and why: `match`, `no_match`, `upgrade`, `platform:<name>` or `ablation` |
-| `arm` | `normal` or `ablation` |
+| `arm` | The group of a session that started while an ablation ran, `normal` or `ablation`, until it leaves the group; otherwise `null` |
 | `apply` | The features that were on |
 | `offered_skills`, `offered_tools` | How many skills the index held, and how many tools the request had after any middleware. For a request that Hermes passes on only in short form, it is Hermes's count of the agent's tools. |
 | `candidates` | The 5 best skills with their scores |
@@ -122,7 +122,7 @@ The report reads the log and prints counts: session levels, turns per platform, 
 
 - skills that no turn loaded, to leave out with Hermes's `skills.disabled`, once the log covers 14 days or more;
 - an ablation week, when no ablation ran in the last 90 days and either a model answered for the first time in the last 7 days or the log goes back 90 days or more;
-- during and after an ablation, a comparison of both groups per turn: tool errors, corrections, repeats, failed turns and tokens. It leaves out sessions that changed group, when the ablation ended or Hermes restarted, and turns without a request that Polymetis saw.
+- during and after an ablation, a comparison of both groups per turn: tool errors, corrections, repeats, failed turns and tokens. It counts only the sessions that started while the ablation ran, up to when they left their group, and leaves out turns without a request that Polymetis saw.
 
 ## Measurements
 
