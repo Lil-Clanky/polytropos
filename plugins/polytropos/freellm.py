@@ -80,13 +80,18 @@ class RestartFailed(Exception):
     """The data and release were restored but the service did not start."""
 
 
-def api_key() -> str | None:
-    """This profile's FREELLMAPI_API_KEY, read the way the router reads it. Callers never print it."""
+def secret(name: str) -> str | None:
+    """This profile's value of a key variable, read the way the router reads it. Callers never print it."""
     try:
         from agent.secret_scope import get_secret  # the active profile's secret, as Hermes resolves it
     except ImportError:  # outside Hermes
-        return os.environ.get("FREELLMAPI_API_KEY")
-    return get_secret("FREELLMAPI_API_KEY")
+        return os.environ.get(name)
+    return get_secret(name)
+
+
+def api_key() -> str | None:
+    """This profile's FREELLMAPI_API_KEY."""
+    return secret("FREELLMAPI_API_KEY")
 
 
 def _default_get(url: str, headers: dict) -> tuple[int, bytes]:
@@ -141,7 +146,8 @@ class FreeLLM:
 
     def node_ok(self) -> tuple[bool, str]:
         try:
-            out = (self.run([self.node, "--version"], capture_output=True, text=True, check=False).stdout or "").strip()
+            out = (self.run([self.node, "--version"], capture_output=True, text=True, check=False,
+                            env=child_env()).stdout or "").strip()
         except OSError:
             return False, "node was not found"
         match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", out)
@@ -154,8 +160,8 @@ class FreeLLM:
 
     # --- build and install ---
 
-    def _step(self, argv: list[str], cwd: Path | None = None, env: dict | None = None) -> str:
-        res = self.run(argv, capture_output=True, text=True, check=False, cwd=cwd, env=env)
+    def _step(self, argv: list[str], cwd: Path | None = None) -> str:
+        res = self.run(argv, capture_output=True, text=True, check=False, cwd=cwd, env=child_env())  # git and npm
         if res.returncode != 0:
             tail = (res.stderr or res.stdout or "").strip()[-500:]
             raise BuildError(f"`{' '.join(argv)}` failed: {tail}")
@@ -179,8 +185,8 @@ class FreeLLM:
             elif server_data.exists():
                 shutil.rmtree(server_data)
             server_data.symlink_to(data)
-            self._step(["npm", "ci"], cwd=dest, env=child_env())
-            self._step(["npm", "run", "build"], cwd=dest, env=child_env())
+            self._step(["npm", "ci"], cwd=dest)
+            self._step(["npm", "run", "build"], cwd=dest)
         except (BuildError, OSError) as err:
             shutil.rmtree(dest, ignore_errors=True)
             raise err if isinstance(err, BuildError) else BuildError(str(err)) from err

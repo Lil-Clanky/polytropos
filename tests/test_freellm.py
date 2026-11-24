@@ -183,7 +183,7 @@ def test_npm_gets_no_provider_keys(tmp_home, monkeypatch):
         return run(argv, **kw)
 
     make(tmp_home, run=recording).build(NEW)
-    for step in ("npm ci", "npm run build"):
+    for step in ("npm ci", "npm run build", f"git clone --depth 1 --branch {NEW.tag} {fl.REPO_URL} {tmp_home / 'fl' / 'releases' / NEW.tag}", "git rev-parse HEAD"):
         assert "OPENAI_API_KEY" not in envs[step] and envs[step]["HOME"] == str(tmp_home)
 
 
@@ -324,6 +324,13 @@ def test_adopt_copies_data_and_refuses_while_running(tmp_home):
                                         ("v18.0.0", False), ("v20.17.9", False), ("garbage", False)])
 def test_node_range(tmp_home, version, ok):
     assert make(tmp_home, run=FakeRun(node=version)).node_ok()[0] is ok
+
+
+def test_node_check_gets_no_provider_keys(tmp_home, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
+    envs = []
+    f = make(tmp_home, run=lambda argv, **kw: envs.append(kw["env"]) or FakeRun()(argv, **kw))
+    assert f.node_ok() == (True, "v22.1.0") and "OPENAI_API_KEY" not in envs[0] and envs[0]["PATH"]
 
 
 def test_node_missing_binary(tmp_home):

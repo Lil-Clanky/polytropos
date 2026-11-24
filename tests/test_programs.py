@@ -141,12 +141,14 @@ def test_rtk_install_verifies_places_and_inits(tmp_home):
     assert calls == [[str(dest), "init", "--agent", "hermes"]]
 
 
-def test_rtk_init_gets_the_profiles_hermes_home(tmp_path):
+def test_rtk_init_gets_the_profiles_hermes_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
     rtk = dataclasses.replace(by_name(P.programs(LOCK, platform="win32", machine="AMD64"))["rtk"], asset_url="")
     envs = []
     P.install(rtk, lambda cmd, **k: envs.append(k["env"]) or proc(), hermes_home=tmp_path / "hermes")
     P.install(rtk, lambda cmd, **k: envs.append(k["env"]) or proc())
-    assert envs[0]["HERMES_HOME"] == str(tmp_path / "hermes") and envs[1] is None  # rtk reads $HERMES_HOME
+    assert envs[0]["HERMES_HOME"] == str(tmp_path / "hermes") and "HERMES_HOME" not in envs[1]  # rtk reads it
+    assert all("OPENAI_API_KEY" not in env and env["PATH"] for env in envs)  # the downloaded binary gets no keys
 
 
 def test_windows_rtk_comes_out_of_the_zip_as_rtk_exe(tmp_home):
@@ -265,7 +267,9 @@ def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch):
     assert envs["npx"]["FREELLMAPI_API_KEY"] == "sk-freellmapi-test-key"  # only FreeLLMAPI's setup-opencode gets it
     assert envs["npx"]["FREELLMAPI_URL"] == f"http://127.0.0.1:{PORT}"  # 31415 on Windows, its default is 3001
     assert "FREELLMAPI_URL" not in envs["npm"]
-    assert envs["hermes"] is None and envs["graphify"] is None  # these work on the profile with Hermes's environment
+    assert envs["hermes"] is None  # Hermes is the host and keeps its environment
+    graphify = {k.upper(): v for k, v in envs["graphify"].items()}  # a uv-installed tool like the others
+    assert "OPENAI_API_KEY" not in graphify and "FREELLMAPI_API_KEY" not in graphify and graphify["PATH"]
 
 
 def test_npm_and_uv_keep_the_windows_folders_and_shell(monkeypatch):
@@ -283,6 +287,14 @@ def test_run_command_starts_what_which_finds(monkeypatch):
     P.run_command(["npm", "install", "-g", "x"], check=True)
     P.run_command(["missing", "--version"])  # not found: the name stays, so the error names it
     assert seen == [([r"C:\nodejs\npm.CMD", "install", "-g", "x"], {"check": True}), (["missing", "--version"], {})]
+
+
+def test_version_checks_get_no_provider_keys(tmp_home, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
+    envs = []
+    for p in P.programs(LOCK, platform="linux", machine="x86_64"):  # rtk, the uv and npm tools, Ollama
+        P.installed_version(p, lambda cmd, **k: envs.append(k["env"]) or proc("x 1.0.0"))
+    assert len(envs) == 8 and all("OPENAI_API_KEY" not in env and env["PATH"] for env in envs)
 
 
 def test_context7_mcp_step_falls_back_to_manual(capsys):

@@ -647,6 +647,7 @@ def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(t
 
 
 def test_rtk_works_on_this_profile_and_graphify_on_hermess_default_home(tmp_home, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
     home = tmp_home / ".hermes" / "profiles" / "work"
     monkeypatch.setenv("HERMES_HOME", str(home))
     rtk = [str(tmp_home / ".local" / "bin" / "rtk"), "init", "--agent", "hermes"]
@@ -657,6 +658,7 @@ def test_rtk_works_on_this_profile_and_graphify_on_hermess_default_home(tmp_home
     run = lambda argv, **kw: envs.append(kw.get("env")) or SimpleNamespace(returncode=0)  # noqa: E731
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
     assert envs[0]["HERMES_HOME"] == str(home)  # rtk falls back to ~/.hermes without it
+    assert "OPENAI_API_KEY" not in envs[0] and envs[0]["PATH"]  # and gets no provider key
     graphify = ["graphify", "install", "--platform", "hermes"]  # graphify ignores HERMES_HOME
     monkeypatch.setattr(cli.paths.sys, "platform", "win32")
     assert cli._added_by(graphify, home) == tmp_home / "AppData" / "Local" / "hermes" / "skills" / "graphify"
