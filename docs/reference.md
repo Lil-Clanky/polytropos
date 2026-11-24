@@ -346,7 +346,7 @@ It reads three variables from the gateway's environment, which Hermes loads from
 
 ### Polymetis
 
-Polymetis reads its settings from `plugins.entries.polymetis.settings` in `config.yaml`, at the start of every turn. With the defaults it only decides and logs. An ablation starts only after a restart of Hermes or the gateway, because Polymetis adds the middleware it needs when Hermes loads it. The keys, the log fields and the report are in [plugins/polymetis/README.md](../plugins/polymetis/README.md).
+Polymetis reads its settings from `plugins.entries.polymetis.settings` in `config.yaml`, at the start of every turn. With the defaults it only decides and logs. An ablation starts when Hermes next loads the plugin, as after a restart of Hermes or the gateway, because Polymetis adds the middleware it needs then. The keys, the log fields and the report are in [plugins/polymetis/README.md](../plugins/polymetis/README.md).
 
 ## Memory guard
 

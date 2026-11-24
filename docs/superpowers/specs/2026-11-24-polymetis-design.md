@@ -112,11 +112,13 @@ turn, so they would be an opt-in of their own.
 With `ablation.share` above 0 and before `ablation.until`, that share of new sessions runs without
 skills: an `llm_request` middleware removes the skill index, the pointers to `skill_view` and the
 skill tools (`skills_list`, `skill_view`, `skill_manage`) from the requests of the session's turns, in
-the formats of chat completions, Anthropic, the Responses API and Bedrock. Hermes deep-copies every
-request for each `llm_request` middleware, so Polymetis registers it only when an ablation is set
-while Hermes loads the plugin; a new ablation starts after a restart, and an ended one gives its
-sessions their skills back from the next turn. The log marks those sessions `arm: ablation`, and the
-report compares both arms. The
+the formats of chat completions, Anthropic, the Responses API and Bedrock. A session is new when it has
+no history; one first seen on a later turn, as after a restart, stays normal. While an `llm_request`
+middleware is registered, Hermes deep-copies every request several times, so Polymetis registers it
+only when an ablation is set while Hermes loads the plugin; a new ablation starts when Hermes next
+loads it, and an ended one gives its sessions their skills back from the next turn. The log marks
+those sessions `arm: ablation`, and the report compares both arms, leaving out sessions that changed
+arm and turns without a request that Polymetis saw, as in Hermes's `codex_app_server` mode. The
 report proposes an ablation when a model it has not seen before shows up in the log, or 90 days after
 the last one.
 

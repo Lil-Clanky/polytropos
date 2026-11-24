@@ -22,7 +22,7 @@ With the default settings this is all it does. The setting `apply` turns on what
 
 ## Settings
 
-Polymetis reads its settings from `plugins.entries.polymetis.settings` in the profile's `config.yaml` at the start of every turn, so a change counts from the next turn. Only the start of an ablation waits for a restart, see [Ablation](#ablation). Edit them with `hermes config edit`, for example:
+Polymetis reads its settings from `plugins.entries.polymetis.settings` in the profile's `config.yaml` at the start of every turn, so a change counts from the next turn. Only the start of an ablation waits until Hermes loads the plugin again, see [Ablation](#ablation). Edit them with `hermes config edit`, for example:
 
 ```yaml
 plugins:
@@ -44,7 +44,7 @@ plugins:
 | `block` | `[]` | Skills that are never ranked or tipped |
 | `platform_levels` | `{}` | A fixed level per gateway platform, such as `whatsapp: none` or `cli: full` |
 | `local_tools` | `clarify`, `memory`, `read_file`, `search_files`, `terminal`, `web_search`, `write_file` | The tools a local model keeps at `lean` and `none` |
-| `ablation.share` | `0` | The share of new sessions that run without skills, from 0 to 1. It starts after a restart of Hermes or the gateway. |
+| `ablation.share` | `0` | The share of new sessions that run without skills, from 0 to 1. It starts when Hermes next loads the plugin, as after a restart of Hermes or the gateway. |
 | `ablation.until` | none | The last day of the ablation, such as `2026-12-31`. Without it the ablation runs until `share` is 0 again. |
 
 A wrong value keeps its default, and Hermes's log names the key without the value.
@@ -76,9 +76,11 @@ Only local models get these variants. More requests fit a local model this way, 
 
 ### Ablation
 
-An ablation measures whether skills help. While `ablation.share` is above 0 and `ablation.until` has not passed, that share of new sessions, picked by a hash of the session id, runs without skills. An `llm_request` middleware removes the skill index, the sentences that point at `skill_view`, and the tools `skills_list`, `skill_view` and `skill_manage` from the requests of those sessions' turns. It reads the formats Hermes sends to chat completions, Anthropic, the Responses API and Bedrock; a request in another format keeps its skills. The log marks these sessions with `arm: ablation`, and the report compares both groups.
+An ablation measures whether skills help. While `ablation.share` is above 0 and `ablation.until` has not passed, that share of new sessions, picked by a hash of the session id, runs without skills. An `llm_request` middleware removes the skill index, the sentences that point at `skill_view`, and the tools `skills_list`, `skill_view` and `skill_manage` from the requests of those sessions' turns. It reads the formats Hermes sends to chat completions, Anthropic, the Responses API and Bedrock; a request in another format keeps its skills. Hermes's `codex_app_server` mode sends no request through the middleware. The log marks these sessions with `arm: ablation`, and the report compares both groups.
 
-Hermes copies every request once more for each `llm_request` middleware, so Polymetis adds its middleware only when Hermes loads it while an ablation is set. After setting `ablation.share`, restart Hermes or the gateway; until then, Hermes's log says that the ablation waits for a restart. When the ablation ends, by `until` or a `share` of 0, its sessions get their skills back from their next turn.
+A session is new when it has no history yet. A session that Polymetis first sees on a later turn, such as after a restart, stays in the normal group, because it may have loaded skills already.
+
+While a plugin has an `llm_request` middleware, Hermes deep-copies every request several times, so Polymetis adds its middleware only when Hermes loads it while an ablation is set. After setting `ablation.share`, restart Hermes or the gateway; until Hermes loads the plugin again, its log says that the ablation waits for a restart. When the ablation ends, by `until` or a `share` of 0, its sessions get their skills back from their next turn.
 
 ## Files
 
@@ -99,7 +101,7 @@ A line of `decisions.jsonl` has these fields.
 | `level`, `level_reason` | The session's level, `null` before it has one, and why: `match`, `no_match`, `upgrade`, `platform:<name>` or `ablation` |
 | `arm` | `normal` or `ablation` |
 | `apply` | The features that were on |
-| `offered_skills`, `offered_tools` | How many skills the index held, and how many tools the request had. Hermes passes a large request on in short form; then this is Hermes's count of the agent's tools. |
+| `offered_skills`, `offered_tools` | How many skills the index held, and how many tools the request had after any middleware. For a request that Hermes passes on only in short form, it is Hermes's count of the agent's tools. |
 | `candidates` | The 5 best skills with their scores |
 | `tip`, `tip_given` | The skills a tip would name, and whether it was sent |
 | `local`, `chosen` | The variant prepared for a local model, and the skills a `lean` local request keeps |
@@ -120,7 +122,7 @@ The report reads the log and prints counts: session levels, turns per platform, 
 
 - skills that no turn loaded, to leave out with Hermes's `skills.disabled`, once the log covers 14 days or more;
 - an ablation week, when no ablation ran in the last 90 days and either a model answered for the first time in the last 7 days or the log goes back 90 days or more;
-- during and after an ablation, a comparison of both groups per turn: tool errors, corrections, repeats, failed turns and tokens.
+- during and after an ablation, a comparison of both groups per turn: tool errors, corrections, repeats, failed turns and tokens. It leaves out sessions that changed group, when the ablation ended or Hermes restarted, and turns without a request that Polymetis saw.
 
 ## Measurements
 
