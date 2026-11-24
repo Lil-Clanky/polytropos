@@ -18,4 +18,5 @@ def handle(args: argparse.Namespace, out=None) -> int:
     if args.polymetis_command == "report":
         records = log.read(hooks.log_path())
         out.write(report.render(records, days=args.days, catalogs=hooks.catalogs()) + "\n")
+        out.write(f"Log: {hooks.log_path()}\n")
     return 0

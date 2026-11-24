@@ -5,6 +5,7 @@ import os
 import time
 
 import pytest
+import yaml
 from polymetis_data import INDEX, ONESHOT, TOOLS
 
 from polymetis import catalog, decide, log, report, search, shape
@@ -38,9 +39,10 @@ def test_settings_read_every_key():
     assert s.ablation_active(datetime.date(2026, 12, 1)) and not s.ablation_active(datetime.date(2026, 12, 2))
 
 
-def test_settings_take_a_yaml_date():
-    s, _ = settings(**{"ablation.until": datetime.date(2027, 1, 5)})
-    assert s.ablation_until == datetime.date(2027, 1, 5)
+@pytest.mark.parametrize("value", ["2027-01-05", "2027-01-05 23:59:00", "'2027-01-05'"])
+def test_settings_take_a_yaml_date(value):
+    s, problems = settings(**{"ablation.until": yaml.safe_load(f"until: {value}")["until"]})
+    assert s.ablation_until == datetime.date(2027, 1, 5) and problems == []
 
 
 def test_a_bad_value_keeps_its_default_and_the_problem_never_quotes_the_value():
@@ -361,5 +363,5 @@ def test_report_proposes_an_ablation_week_for_a_new_model():
     records = [rec(30, answered_by=["m1"]), rec(2, session="b", answered_by=["m2"])]
     out = report.render(records, now=NOW)
     assert "Proposal: run an ablation week (new model(s) since 7 days: m2)" in out
-    assert "ablation: {share: 0.25, until: " in out
+    assert "then restart Hermes or the gateway" in out and "ablation: {share: 0.25, until: " in out
     assert "Proposal: run an ablation week" not in report.render([rec(2)], now=NOW)

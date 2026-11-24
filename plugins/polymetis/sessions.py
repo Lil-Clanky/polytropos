@@ -100,13 +100,15 @@ class Store:
 
 
 def fingerprint(messages) -> str | None:
-    """A key for one conversation: its system prompt and its first user message. A request seen in
-    ``pre_api_request`` and the same request in the router's hands get the same key."""
+    """A key for the requests of one turn: the system prompt, the first user message and the last one. A
+    request seen in ``pre_api_request`` and the same request in the router's hands get the same key. Hermes's
+    background review asks its own question at the end of the same conversation, so it gets another key."""
     if not isinstance(messages, list):
         return None
-    system = next((m for m in messages if isinstance(m, dict) and m.get("role") == "system"), None)
-    user = next((m for m in messages if isinstance(m, dict) and m.get("role") == "user"), None)
-    if system is None and user is None:
+    system = next((m for m in messages if isinstance(m, dict) and m.get("role") in ("system", "developer")), None)
+    users = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
+    if system is None and not users:
         return None
-    parts = [text_of(system.get("content")) if system else "", text_of(user.get("content")) if user else ""]
+    parts = [text_of(system.get("content")) if system else ""]
+    parts += [text_of(m.get("content")) for m in users[:1] + users[-1:]]
     return hashlib.sha256(json.dumps(parts).encode()).hexdigest()

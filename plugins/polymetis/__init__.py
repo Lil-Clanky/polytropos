@@ -1,7 +1,8 @@
 """Polymetis: decides per session which skills and tools a Hermes model gets, and logs what it decided.
 
-Settings live in plugins.entries.polymetis.settings in the profile's config.yaml. With ``apply`` empty,
-the default, Polymetis only decides and logs and every request goes out as Hermes built it.
+Settings live in plugins.entries.polymetis.settings in the profile's config.yaml. With the defaults,
+``apply`` empty and no ablation, Polymetis only decides and logs and every request goes out as Hermes
+built it.
 """
 
 import sys
@@ -34,7 +35,10 @@ def register(ctx) -> None:
     ctx.register_hook("post_api_request", hooks.on_post_api_request)
     ctx.register_hook("post_tool_call", hooks.on_post_tool_call)
     ctx.register_hook("on_session_end", hooks.on_session_end)
-    if hasattr(ctx, "register_middleware"):
+    # Hermes deep-copies every request for each llm_request middleware, so Polymetis adds its own only
+    # while an ablation runs; an ablation set later starts when Hermes loads the plugin again
+    hooks.ablation_ready = hasattr(ctx, "register_middleware") and hooks._refresh_settings().ablation_active()
+    if hooks.ablation_ready:
         ctx.register_middleware("llm_request", hooks.on_llm_request)
     _router_hooks()["polymetis"] = hooks.shape_local  # keyed, so a plugin reload replaces it
     if hasattr(ctx, "on_unload"):

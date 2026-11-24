@@ -35,7 +35,7 @@ def _ablation(all_records, now: float) -> list[str]:
     why = (f"new model(s) since {NEW_MODEL_DAYS} days: {', '.join(new)}" if new
            else f"no ablation in the last {ABLATION_EVERY_DAYS} days")
     return ["", f"Proposal: run an ablation week ({why}). A quarter of new sessions then runs without skills,",
-            "and this report compares both groups. Set in config.yaml:",
+            "and this report compares both groups. Set in config.yaml, then restart Hermes or the gateway:",
             f"  plugins.entries.polymetis.settings.ablation: {{share: 0.25, until: {until}}}"]
 
 

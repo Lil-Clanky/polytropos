@@ -8,6 +8,8 @@ import functools
 import json
 import logging
 import os
+import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -20,10 +22,25 @@ from .sessions import Session, Store, Turn
 
 logger = logging.getLogger("hermes_plugins.polymetis")
 STORE = Store()
+FOLDER = "agent-plugin-polymetis-1717164d"  # the name Hermes gives this plugin's data folder
+
+
+def _default_data_dir() -> Path:
+    """The folder where Hermes puts this plugin's data, for a Hermes whose plugins have no ``ctx.state``."""
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:  # outside Hermes
+        return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "plugin-data" / FOLDER
+    return Path(get_hermes_home()) / "plugin-data" / FOLDER
+
 
 _get_config: Callable[[str, Any], Any] = lambda key, default=None: default  # noqa: E731
-_data_dir: Callable[[], Path] = lambda: Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "plugin-data" / "polymetis"  # noqa: E731
+_data_dir: Callable[[], Path] = _default_data_dir
 _settings = Settings()
+ablation_ready = False  # register() sets it when it added the llm_request middleware that an ablation needs
+_files_lock = threading.Lock()
+_saved: dict[Path, tuple] = {}  # the index last written to each file
+_TOOL_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 
 
 def configure(get_config: Callable[[str, Any], Any], data_dir: Callable[[], Path] | None = None) -> None:
@@ -85,17 +102,30 @@ def _catalog(session: Session) -> tuple | None:
 
 
 def _save_catalog(platform: str, skills: tuple) -> None:
-    if STORE.catalogs.get(platform) == skills:
+    with STORE.lock:
+        STORE.catalogs[platform] = skills
+    if not _settings.log:  # the same switch as the log: Polymetis writes no file with it off
         return
-    STORE.catalogs[platform] = skills
-    if _settings.log:  # the same switch as the log: Polymetis writes no file with it off
-        path = _catalog_file(platform)
+    path = _catalog_file(platform)
+    with _files_lock:  # the sessions of one platform can send their index at the same time
+        if _saved.get(path) == skills:
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # the gateway and a CLI may share the folder
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump([dataclasses.asdict(s) for s in skills], handle)
         os.replace(tmp, path)
+        _saved[path] = skills
+
+
+def _turn(session: Session | None, turn_id: Any) -> Turn | None:
+    """The session's turn in progress when a hook belongs to it. Hermes's background review shares the
+    session id but runs turns of its own, after the user's turn and sometimes alongside the next one."""
+    turn = session.current if session else None
+    if turn is None or (turn_id and turn.turn_id and turn_id != turn.turn_id):
+        return None
+    return turn
 
 
 def _search(s: Settings, session: Session, turn: Turn) -> None:
@@ -121,13 +151,18 @@ def on_pre_llm_call(session_id: str = "", turn_id: str = "", user_message: Any =
     if not session_id:
         return None
     s = _refresh_settings()
+    if s.ablation_active() and not ablation_ready:
+        _warn_once("ablation: restart Hermes to start it, the plugin adds what it needs when Hermes loads it")
     with STORE.lock:
         session = STORE.get(session_id)
         if session is None:
+            arm = decide.arm(s, session_id) if ablation_ready else "normal"
             session = STORE.add(session_id, Session(key=decide.session_key(session_id), platform=platform or "",
-                                                    model=model or "", arm=decide.arm(s, session_id)))
+                                                    model=model or "", arm=arm))
             if session.arm == "ablation":  # known before any index: the middleware removes it
                 session.level, session.level_reason = "none", "ablation"
+        elif session.arm == "ablation" and not s.ablation_active():  # it ended: the skills come back
+            session.arm, session.level, session.level_reason = "normal", None, ""
         text = text_of(user_message)
         session.turns += 1
         session.text = text
@@ -142,11 +177,12 @@ def on_pre_llm_call(session_id: str = "", turn_id: str = "", user_message: Any =
 
 
 @_safe
-def on_pre_api_request(session_id: str = "", platform: str = "", model: str = "", provider: str = "",
-                       system_prompt: Any = None, request_messages: Any = None, request: Any = None,
-                       **kwargs) -> None:
+def on_pre_api_request(session_id: str = "", turn_id: str = "", platform: str = "", model: str = "",
+                       provider: str = "", system_prompt: Any = None, request_messages: Any = None,
+                       request: Any = None, tool_count: Any = None, **kwargs) -> None:
     session = STORE.get(session_id) if session_id else None
-    if session is None:
+    turn = _turn(session, turn_id)
+    if turn is None:  # between turns, or a request of the background review
         return
     found = parse_index(text_of(system_prompt))
     body = request.get("body") if isinstance(request, dict) else None
@@ -156,23 +192,21 @@ def on_pre_api_request(session_id: str = "", platform: str = "", model: str = ""
         if found is not None:
             session.catalog = tuple(found)
         STORE.remember_request(request_messages, session_id)
-        turn = session.current
-        if turn is not None:
-            turn.api_calls += 1
-            turn.offered_skills = len(found) if found is not None else 0
-            if isinstance(tools, list):
-                turn.offered_tools = len(tools)
-            if session.level is None:  # no index was known when the turn began; decide with this one
-                _search(_settings, session, turn)
+        turn.api_calls += 1
+        turn.offered_skills = len(found) if found is not None else 0
+        # Hermes passes a large request on in short form, without its tools; tool_count is its own count
+        turn.offered_tools = len(tools) if isinstance(tools, list) else \
+            tool_count if isinstance(tool_count, int) else None
+        if session.level is None:  # no index was known when the turn began; decide with this one
+            _search(_settings, session, turn)
     if found is not None:
         _save_catalog(session.platform, session.catalog)
 
 
 @_safe
-def on_post_api_request(session_id: str = "", response_model: Any = None, response: Any = None,
+def on_post_api_request(session_id: str = "", turn_id: str = "", response_model: Any = None, response: Any = None,
                         **kwargs) -> None:
-    session = STORE.get(session_id) if session_id else None
-    turn = session.current if session else None
+    turn = _turn(STORE.get(session_id) if session_id else None, turn_id)
     if turn is None:
         return
     response = response if isinstance(response, dict) else {}
@@ -191,18 +225,20 @@ def on_post_api_request(session_id: str = "", response_model: Any = None, respon
 
 
 @_safe
-def on_post_tool_call(tool_name: str = "", args: Any = None, session_id: str = "", status: str = "",
-                      **kwargs) -> None:
+def on_post_tool_call(tool_name: str = "", args: Any = None, session_id: str = "", turn_id: str = "",
+                      status: str = "", **kwargs) -> None:
     session = STORE.get(session_id) if session_id else None
-    turn = session.current if session else None
-    if turn is None or not tool_name:
+    turn = _turn(session, turn_id)
+    if turn is None or not isinstance(tool_name, str) or not tool_name:
         return
     with STORE.lock:
-        turn.used_tools[tool_name] += 1
+        # the model writes these names, so the log takes only a tool name's shape and the index's skill names
+        turn.used_tools[tool_name if _TOOL_NAME.fullmatch(tool_name) else "other"] += 1
         if status == "error":
             turn.tool_errors += 1
         name = args.get("name") if isinstance(args, dict) else None
-        if tool_name == "skill_view" and isinstance(name, str) and name not in turn.used_skills:
+        known = {skill.name for skill in session.catalog or ()}
+        if tool_name == "skill_view" and name in known and name not in turn.used_skills:
             turn.used_skills.append(name)
 
 
@@ -239,10 +275,10 @@ def on_session_end(session_id: str = "", completed: Any = None, failed: Any = No
 
 
 @_safe
-def on_llm_request(request: Any = None, session_id: str = "", **kwargs) -> dict | None:
-    """``llm_request`` middleware: a session in the ablation arm gets no skills at all."""
+def on_llm_request(request: Any = None, session_id: str = "", turn_id: str = "", **kwargs) -> dict | None:
+    """``llm_request`` middleware: the user's turns of a session in the ablation arm get no skills at all."""
     session = STORE.get(session_id) if session_id else None
-    if session is None or session.arm != "ablation" or not isinstance(request, dict):
+    if session is None or session.arm != "ablation" or not isinstance(request, dict) or _turn(session, turn_id) is None:
         return None
     return {"request": shape.without_skills(request), "source": "polymetis", "reason": "ablation"}
 

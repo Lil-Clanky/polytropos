@@ -59,6 +59,8 @@ def _levels(value: Any) -> dict[str, str]:
 def _date(value: Any) -> datetime.date | None:
     if value in (None, ""):
         return None
+    if isinstance(value, datetime.datetime):  # YAML reads 2026-12-01 23:59:00 as a timestamp
+        return value.date()
     if isinstance(value, datetime.date):  # YAML reads an unquoted 2026-12-01 as a date
         return value
     try:
