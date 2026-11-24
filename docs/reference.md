@@ -1,6 +1,6 @@
 # Polytropos reference
 
-This reference covers Polytropos 0.2.0 on Hermes Agent v0.23.2. Paths are shown with their defaults. `$HERMES_HOME` is `~/.hermes`, and `$XDG_DATA_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are `~/.local/share`, `~/.local/state` and `~/.cache`. For a named Hermes profile the Hermes paths are under `~/.hermes/profiles/<name>/`. On Windows `~` is `%USERPROFILE%`, `$HERMES_HOME` is `%LOCALAPPDATA%\hermes`, and Polytropos keeps its data, state and cache together in `%LOCALAPPDATA%\polytropos` unless the `XDG_*` variables are set. The install steps are in the [README](../README.md).
+This reference covers Polytropos 0.2.1 on Hermes Agent v0.23.2. Paths are shown with their defaults. `$HERMES_HOME` is `~/.hermes`, and `$XDG_DATA_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are `~/.local/share`, `~/.local/state` and `~/.cache`. For a named Hermes profile the Hermes paths are under `~/.hermes/profiles/<name>/`. On Windows `~` is `%USERPROFILE%`, `$HERMES_HOME` is `%LOCALAPPDATA%\hermes`, and Polytropos keeps its data, state and cache together in `%LOCALAPPDATA%\polytropos` unless the `XDG_*` variables are set. The install steps are in the [README](../README.md).
 
 - [Commands](#commands)
 - [How the router picks a model](#how-the-router-picks-a-model)
