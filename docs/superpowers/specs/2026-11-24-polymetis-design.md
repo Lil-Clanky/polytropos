@@ -55,7 +55,7 @@ therefore recomputes the history for most models, so a local model's set must st
 | Level | Strong model | Local model behind the router |
 |---|---|---|
 | `none` | no tip | core tools only, no skill index |
-| `lean` | a tip naming the 1–2 best skills for the turn | core tools, `skill_view`, and an index of only the session's 1–2 skills |
+| `lean` | a tip naming the one or two best skills for the turn | core tools, `skill_view`, and an index of only the session's one or two skills |
 | `full` | Hermes's default, with tips | Hermes's default request |
 
 A local request that does not fit the model's window steps down one level at a time, to `bare` (no

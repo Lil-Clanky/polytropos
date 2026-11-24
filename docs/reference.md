@@ -185,11 +185,26 @@ Once a model has answered, later requests in the same turn try it first.
 
 ### Window fit
 
-The router checks the window of local models only. It estimates the size of a request in tokens as the length of the request's messages and tool definitions written as JSON, divided by 3. To that it adds the request's `max_tokens`, or 1024 when the request has none. A local model gets the request when this sum is at most the `context_window` of its upstream. A local upstream without `context_window` gets no requests. The code is `_candidates` and `_usable` in `plugins/polytropos_router/client.py`, with the estimate in `tokens.py`.
+The router checks the window of local models only. It estimates the size of a request in tokens as the length of the request's messages and tool definitions written as JSON, divided by 3. To that it adds the request's `max_tokens`, or 1024 when the request has none. A local model gets the request when this sum is at most the `context_window` of its upstream. A local upstream without `context_window` gets no requests. When another plugin changes the request for a local model, the check counts the changed request; see [Request hooks for local models](#request-hooks-for-local-models). The code is `_candidates` and `_unusable` in `plugins/polytropos_router/client.py`, with the estimate in `tokens.py`.
 
 Hermes v0.23.2 has no setting for the output limit. Its provider guide says that it no longer reads `model.max_tokens`, `HERMES_MAX_TOKENS` or provider output-cap settings (`website/docs/integrations/providers.md` in Hermes's source), and the router's provider profile sets no output limit of its own. A normal turn therefore reaches the router without `max_tokens`, and the check counts the router's default of 1024 output tokens (`client.py`). The router forwards the request with only `model` changed, so the model gets no `max_tokens` either. When Hermes retries a request, for example after a reply was cut off or an output limit was too large, it can set a one-time `max_tokens`, and the check counts that value.
 
 With `context_window: 8192`, a request fits when its estimate is at most 7168 tokens, which is about 21,500 characters of JSON. Hermes's system prompt and tool definitions count toward that. Hermes's prompt-surface test fixture (`tests/fixtures/prompt_surface/surfaces.json` in Hermes's source) puts a default turn with tools at about 12,000 tokens before any history, which the router's estimate counts as about 16,000. With the 1024 output tokens and the conversation's history on top, an agent turn with Hermes's default tools needs a window of about 20,000 tokens by the router's estimate. A window of 8192 serves short requests without tools, such as titles, and the next model in the chain gets the other requests.
+
+### Request hooks for local models
+
+Another plugin can change the request that a local model gets, for example to leave out tools and skills so that it fits a small window. [Polymetis](../plugins/polymetis/README.md) does this. A plugin registers a hook in the dict `local_request` of a module named `polytropos_router_hooks` in `sys.modules`, which the first plugin that registers creates:
+
+```python
+import sys, types
+
+store = sys.modules.setdefault("polytropos_router_hooks", types.ModuleType("polytropos_router_hooks"))
+store.__dict__.setdefault("local_request", {})["my-plugin"] = my_hook
+```
+
+For each local model in the chain, the router calls the hooks in the order they were registered, with the request and a dict of `upstream`, `model`, `window` (the model's `context_window`) and `fits`. `fits(request)` tells whether a request fits that window by the router's own estimate. A hook returns `None` to leave the request alone, or `{"request": ..., "variant": ...}` with a new request and a short name for it. The first hook that returns a request wins. The window fit and the request sent to that model then use it, and the trace names the variant. A hook that raises is skipped, and the router logs the error type once, without the message. Cloud models get the request as the router received it. Without hooks nothing changes.
+
+The memory guard, the fit check and the canary filter work as before. The router judges broken tool calls against the tools of the request it received, because Hermes can run each of those.
 
 ### Fallback
 
@@ -219,7 +234,7 @@ For an upstream with `api_key_env: FREELLMAPI_API_KEY`, the router uses the key 
 
 ### Traces
 
-With `save_traces: true` the router appends one JSON line per request to `~/.local/state/polytropos/router-traces.jsonl`, a file it creates with mode 0600. Each line has `time`, `tier`, `reason`, `slot` (the model that answered), `retried` and `fell_back_from` (the models tried before it), and no message text. `status` and `/polytropos` show the last line.
+With `save_traces: true` the router appends one JSON line per request to `~/.local/state/polytropos/router-traces.jsonl`, a file it creates with mode 0600. Each line has `time`, `tier`, `reason`, `slot` (the model that answered), `retried`, `fell_back_from` (the models tried before it), `skipped`, `tokens_est` and `duration_ms`, and no message text. `skipped` lists the local models that the hard filters left out, each with `window`, `guard` or `fit`, and the models that moved to the end of the chain for their tool checks, with `canary`. `tokens_est` is the router's estimate of the request that the answering model got, without the room for the reply. `duration_ms` runs from the start of the request to the answer, or to the end of the stream. When a request hook changed the answering model's request, `shaped` names the variant. At 5 MB the file moves to `router-traces.jsonl.1`, which replaces the older one. `status` and `/polytropos` show the last line.
 
 ## The classifier's extra call
 
@@ -328,6 +343,10 @@ It reads three variables from the gateway's environment, which Hermes loads from
 | `/pace help` | Shows these commands |
 
 `/pace` writes `enabled`, `min_seconds` and `max_seconds` to `~/.hermes/plugins/whatsapp-human-pace/settings.json`, and these win over the environment. The same file can hold `humanize`, which is `true` by default. With `false`, WhatsApp replies keep the model's Markdown and emoji. While messages wait, their text is saved in `pending.json` in the same folder, with mode 0600. After a gateway restart, the saved texts of a chat go along with the next message from that chat.
+
+### Polymetis
+
+Polymetis reads its settings from `plugins.entries.polymetis.settings` in `config.yaml`, at the start of every turn. With the defaults it only decides and logs. The keys, the log fields and the report are in [plugins/polymetis/README.md](../plugins/polymetis/README.md).
 
 ## Memory guard
 
@@ -482,6 +501,7 @@ The file holds no B6 cells and no results of `--openai-endpoint` runs. Polytropo
 | `~/.hermes/plugins/polytropos/versions.lock` | The copy of `versions.lock` that the commands read |
 | `~/.hermes/plugins/.install-metadata.json` | Hermes's install records, which the doctor reads |
 | `~/.hermes/plugins/whatsapp-human-pace/` | whatsapp-human-pace with its `settings.json` and `pending.json`, when installed |
+| `~/.hermes/plugin-data/polymetis/` | Polymetis's `decisions.jsonl` and `index-<platform>.json`, mode 0600, when installed and `log` is on |
 | `~/.hermes/skills/graphify/` | graphify's Hermes skill, written by graphify to Hermes's default home |
 | `~/.hermes/plugins/rtk-rewrite/` | rtk's Hermes plugin, written by `rtk init --agent hermes` |
 | `~/.config/opencode/opencode.json` | OpenCode's config, where FreeLLMAPI's `setup-opencode` adds its provider and sets a default model |

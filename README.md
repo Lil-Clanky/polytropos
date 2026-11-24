@@ -204,6 +204,16 @@ hermes plugins install Lil-Clanky/polytropos/plugins/whatsapp_human_pace
 
 Hermes asks whether to enable it, and the default answer is no. From the terminal or any chat other than WhatsApp, `/pace` shows or changes the delay. The settings are in the reference.
 
+## Polymetis
+
+The repository also holds `polymetis`, a plugin that decides per session which of Hermes's skills a model gets. It ranks the skills in Hermes's skill index against each message, on this machine and without a model, and logs what it decided without message text. By default it changes nothing that a model gets. Turned on, it adds a short tip that names the matching skill, and it gives local models behind `polytropos-router` a smaller request with fewer tools and skills. `hermes polymetis report` shows what it decided and which skills the models loaded. The plugin is not part of the pack and needs no other part of Polytropos. Install it on its own with
+
+```sh
+hermes plugins install Lil-Clanky/polytropos/plugins/polymetis
+```
+
+Hermes asks whether to enable it, and the default answer is no. Its settings, files and report are described in [plugins/polymetis/README.md](plugins/polymetis/README.md).
+
 ## Development
 
 The tests use pytest, `openai` and `pyyaml`.
