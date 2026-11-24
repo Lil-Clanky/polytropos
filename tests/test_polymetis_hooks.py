@@ -220,6 +220,8 @@ def test_only_index_skills_and_tool_names_reach_the_log(pm, tmp_path):
 @pytest.mark.parametrize("request_, expected", [
     ({"body": {"tools": TOOLS[:3]}}, 3),
     ({"body": {"tools": TOOLS[:3] + [{"_truncated_items": 57}]}}, 60),  # Hermes kept 50 items of a long list
+    ({"body": {"toolConfig": {"tools": [{"toolSpec": {"name": "a"}}, {"toolSpec": {"name": "b"}},
+                                        {"cachePoint": {"type": "default"}}]}}}, 2),  # as Bedrock gets them
     ({"_truncated": True}, 42),  # Hermes passed the request on in short form: its own count
 ])
 def test_offered_tools_counts_the_tools_of_a_shortened_request(pm, tmp_path, request_, expected):

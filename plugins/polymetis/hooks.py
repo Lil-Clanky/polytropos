@@ -133,11 +133,16 @@ def _turn(session: Session | None, turn_id: Any) -> Turn | None:
 
 
 def _count(items: list) -> int:
-    """The length of a list in Hermes's hook payload. For a large request Hermes keeps the first 50 items
-    of a list and adds ``{"_truncated_items": n}`` for the rest."""
+    """How many tools a list in Hermes's hook payload holds. Bedrock ends its tools with a ``cachePoint``.
+    For a large request Hermes keeps the first 50 items of a list and adds ``{"_truncated_items": n}`` for
+    the rest, so a cachePoint among those counts as a tool."""
     last = items[-1] if items else None
     left_out = last.get("_truncated_items") if isinstance(last, dict) and len(last) == 1 else None
-    return len(items) - 1 + left_out if isinstance(left_out, int) else len(items)
+    if isinstance(left_out, int):
+        items = items[:-1]
+    else:
+        left_out = 0
+    return left_out + sum(not (isinstance(t, dict) and "cachePoint" in t) for t in items)
 
 
 def _search(s: Settings, session: Session, turn: Turn) -> None:
@@ -202,7 +207,9 @@ def on_pre_api_request(session_id: str = "", turn_id: str = "", platform: str = 
         return
     found = parse_index(text_of(system_prompt))
     body = request.get("body") if isinstance(request, dict) else None
-    tools = body.get("tools") if isinstance(body, dict) else None
+    body = body if isinstance(body, dict) else {}
+    config = body.get("toolConfig")
+    tools = config.get("tools") if isinstance(config, dict) else body.get("tools")  # Bedrock's, or the others'
     with STORE.lock:
         session.provider, session.model = provider or session.provider, model or session.model
         if found is not None:
