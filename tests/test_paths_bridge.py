@@ -64,9 +64,9 @@ def test_freellmapi_port_is_the_one_the_desktop_app_saved_on_windows(tmp_home, m
         assert paths.freellmapi_port() == 31415
 
 
-def test_freellmapi_port_of_the_store_app_comes_from_its_package_folder(tmp_home, monkeypatch):
+def test_freellmapi_port_of_the_store_app_comes_from_its_package_folder_first(tmp_home, monkeypatch):
     monkeypatch.setattr(paths.sys, "platform", "win32")
-    monkeypatch.setenv("APPDATA", str(tmp_home / "AppData" / "Roaming"))
+    monkeypatch.setenv("APPDATA", "")  # empty counts as unset: %USERPROFILE%\AppData\Roaming
 
     def save(roaming, text, mtime):
         config = roaming / "FreeLLMAPI" / "config.json"
@@ -75,19 +75,26 @@ def test_freellmapi_port_of_the_store_app_comes_from_its_package_folder(tmp_home
         os.utime(config, (mtime, mtime))
         return config
 
-    packages = tmp_home / "AppData" / "Local" / "Packages"  # Windows redirects a Store app's %APPDATA% writes here
+    save(tmp_home / "AppData" / "Roaming", '{"port": 31416}', 0)  # as an earlier .exe install left it
+    assert paths.freellmapi_port() == 31416
+    packages = tmp_home / "AppData" / "Local" / "Packages"  # Windows redirects a Store app's %APPDATA% here
+    save(packages / "Other.App_x1" / "LocalCache" / "Roaming", '{"port": 31499}', 3)
+    assert paths.freellmapi_port() == 31416  # only FreeLLMAPI's package (identityName TashAhmed.FreeLLMAPI)
     save(packages / "TashAhmed.FreeLLMAPI_old" / "LocalCache" / "Roaming", '{"port": 31417}', 1)
-    assert paths.freellmapi_port() == 31417
+    assert paths.freellmapi_port() == 31417  # the Store app reads its own copy, so it beats the plain file
     newest = save(packages / "TashAhmed.FreeLLMAPI_new" / "LocalCache" / "Roaming", '{"port": 31418}', 2)
     assert paths.freellmapi_port() == 31418  # the most recently written of several
-    plain = save(tmp_home / "AppData" / "Roaming", '{"port": 31416}', 0)
-    assert paths.freellmapi_port() == 31416  # the plain %APPDATA% file comes first
-    plain.write_text("{", encoding="utf-8")
     newest.write_text('{"theme": "dark"}', encoding="utf-8")
     os.utime(newest, (2, 2))
     assert paths.freellmapi_port() == 31417  # files without a port are passed over
-    monkeypatch.delenv("LOCALAPPDATA")
-    assert paths.freellmapi_port() == 31415  # nothing to look in, and no home lookup when the plugins load
+    monkeypatch.setenv("LOCALAPPDATA", "")
+    assert paths.freellmapi_port() == 31417  # empty counts as unset: %USERPROFILE%\AppData\Local
+
+    def no_home():
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(paths.Path, "home", no_home)
+    assert paths.freellmapi_port() == 31415  # this runs when the plugins load, so it never raises
 
 
 def test_message_text_handles_parts():

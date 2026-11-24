@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 FREELLMAPI_DESKTOP_PORT = 31415  # FreeLLMAPI's desktop app, desktop/src/main.ts DEFAULT_PORT
+_CONFIG = "FreeLLMAPI/config.json"  # the desktop app's settings under %APPDATA%, desktop/src/config.ts
 
 
 def _local_appdata() -> Path:
@@ -53,13 +54,13 @@ def freellmapi_port() -> int:
     when its port is taken and saves the one it got as "port" in %APPDATA%\\FreeLLMAPI\\config.json (config.ts)."""
     if sys.platform != "win32":
         return 3001
-    plain = [Path(os.environ["APPDATA"]) / "FreeLLMAPI" / "config.json"] if os.environ.get("APPDATA") else []
-    # Windows redirects the %APPDATA% writes of the Store (MSIX) app into its package folder; the newest copy counts.
-    # This runs when the plugins load, so a missing variable or an unreadable folder only means no copy.
-    local = os.environ.get("LOCALAPPDATA")
+    # The Store (MSIX) app, identityName TashAhmed.FreeLLMAPI in desktop/electron-builder.yml, reads and writes its own
+    # copy of %APPDATA% in its package folder. That copy comes first, so a plain file that an earlier .exe install left
+    # does not win; of several packages the newest copy counts.
     try:
-        stored = sorted(Path(local).glob("Packages/*/LocalCache/Roaming/FreeLLMAPI/config.json"),
-                        key=lambda config: config.stat().st_mtime, reverse=True) if local else []
-    except OSError:
-        stored = []
-    return next((port for config in plain + stored if (port := _saved_port(config))), FREELLMAPI_DESKTOP_PORT)
+        stored = sorted(_local_appdata().glob(f"Packages/TashAhmed.FreeLLMAPI_*/LocalCache/Roaming/{_CONFIG}"),
+                        key=lambda config: config.stat().st_mtime, reverse=True)
+        plain = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / _CONFIG
+    except (OSError, RuntimeError):  # an unreadable folder, or no home: this runs when the plugins load
+        return FREELLMAPI_DESKTOP_PORT
+    return next((port for config in [*stored, plain] if (port := _saved_port(config))), FREELLMAPI_DESKTOP_PORT)
