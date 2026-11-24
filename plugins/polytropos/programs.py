@@ -1,5 +1,6 @@
 """Pinned programs: read versions.lock, check what is installed, install what is missing."""
 
+import contextlib
 import hashlib
 import os
 import re
@@ -179,10 +180,21 @@ def _install_rtk(p: Program, download: Callable[[str, Path], None]) -> None:
         if data is None:
             raise ValueError(f"no rtk binary in {p.asset_url}")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        staged = dest.with_name(f".{dest.name}.new")
-        staged.write_bytes(data)
-        os.chmod(staged, 0o755)
-        os.replace(staged, dest)  # also on Windows: the file is replaced, never linked
+        staged, aside, moved = dest.with_name(f".{dest.name}.new"), dest.with_name(f"{dest.name}.old"), False
+        try:
+            staged.write_bytes(data)
+            os.chmod(staged, 0o755)
+            if dest.suffix == ".exe" and dest.exists():  # Windows cannot overwrite a running .exe, but can rename it
+                with contextlib.suppress(OSError):  # the copy an earlier install set aside, unless it still runs
+                    aside.unlink(missing_ok=True)
+                os.replace(dest, aside)
+                moved = True
+            os.replace(staged, dest)  # also on Windows: the file is replaced, never linked
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            if moved:
+                os.replace(aside, dest)  # put the working copy back
+            raise
 
 
 def _install_ollama_tree(p: Program, download: Callable[[str, Path], None]) -> None:

@@ -2,6 +2,7 @@ import dataclasses
 import hashlib
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -163,6 +164,54 @@ def test_windows_rtk_comes_out_of_the_zip_as_rtk_exe(tmp_home):
     assert sorted(p.name for p in dest.parent.iterdir()) == ["rtk.exe"]
     assert calls == [[str(dest), "init", "--agent", "hermes"]]
 
+
+def windows_rtk(payload):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("rtk.exe", payload)
+    data = buf.getvalue()
+    rtk = by_name(P.programs(LOCK, platform="win32", machine="AMD64"))["rtk"]
+    rtk = dataclasses.replace(rtk, asset_sha256=hashlib.sha256(data).hexdigest())
+    return rtk, lambda url, dest: dest.write_bytes(data)
+
+
+def test_windows_rtk_update_sets_the_old_exe_aside_and_puts_it_back_on_failure(tmp_home, monkeypatch):
+    rtk, download = windows_rtk(b"MZ new")
+    bin_dir = tmp_home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "rtk.exe").write_bytes(b"MZ running")  # Windows can rename a running exe, but not overwrite it
+    (bin_dir / "rtk.exe.old").write_bytes(b"MZ older")  # what an earlier update set aside
+    P.install(rtk, lambda cmd, **k: proc(), download=download)
+    assert (bin_dir / "rtk.exe").read_bytes() == b"MZ new" and (bin_dir / "rtk.exe.old").read_bytes() == b"MZ running"
+    replace = os.replace
+
+    def refuse_the_new_exe(src, dst):
+        if Path(src).name == ".rtk.exe.new":
+            raise PermissionError(13, "Access is denied")
+        replace(src, dst)
+
+    monkeypatch.setattr(P.os, "replace", refuse_the_new_exe)
+    with pytest.raises(PermissionError):
+        P.install(rtk, lambda cmd, **k: proc(), download=download)
+    assert (bin_dir / "rtk.exe").read_bytes() == b"MZ new"  # the working copy is back
+    assert sorted(f.name for f in bin_dir.iterdir()) == ["rtk.exe"]  # and no staged file is left
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses to overwrite a running exe")
+def test_windows_rtk_update_replaces_a_running_exe(tmp_home):
+    rtk, download = windows_rtk(b"MZ new")
+    exe = tmp_home / ".local" / "bin" / "rtk.exe"
+    exe.parent.mkdir(parents=True)
+    shutil.copy(Path(os.environ["SYSTEMROOT"]) / "System32" / "PING.EXE", exe)  # any exe that keeps running
+    running = subprocess.Popen([str(exe), "-n", "30", "127.0.0.1"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+    try:
+        P.install(rtk, lambda cmd, **k: proc(), download=download)
+        assert exe.read_bytes() == b"MZ new" and running.poll() is None
+        assert sorted(f.name for f in exe.parent.iterdir()) == ["rtk.exe", "rtk.exe.old"]
+    finally:
+        running.kill()
+        running.wait()
 
 def test_rtk_sha_mismatch_raises_and_leaves_nothing(tmp_home):
     rtk = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["rtk"]
