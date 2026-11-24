@@ -346,7 +346,7 @@ It reads three variables from the gateway's environment, which Hermes loads from
 
 ### Polymetis
 
-Polymetis reads its settings from `plugins.entries.polymetis.settings` in `config.yaml`, at the start of every turn. With the defaults it only decides and logs. The keys, the log fields and the report are in [plugins/polymetis/README.md](../plugins/polymetis/README.md).
+Polymetis reads its settings from `plugins.entries.polymetis.settings` in `config.yaml`, at the start of every turn. With the defaults it only decides and logs. An ablation starts only after a restart of Hermes or the gateway, because Polymetis adds the middleware it needs when Hermes loads it. The keys, the log fields and the report are in [plugins/polymetis/README.md](../plugins/polymetis/README.md).
 
 ## Memory guard
 
@@ -501,7 +501,7 @@ The file holds no B6 cells and no results of `--openai-endpoint` runs. Polytropo
 | `~/.hermes/plugins/polytropos/versions.lock` | The copy of `versions.lock` that the commands read |
 | `~/.hermes/plugins/.install-metadata.json` | Hermes's install records, which the doctor reads |
 | `~/.hermes/plugins/whatsapp-human-pace/` | whatsapp-human-pace with its `settings.json` and `pending.json`, when installed |
-| `~/.hermes/plugin-data/polymetis/` | Polymetis's `decisions.jsonl` and `index-<platform>.json`, mode 0600, when installed and `log` is on |
+| `~/.hermes/plugin-data/agent-plugin-polymetis-1717164d/` | Polymetis's `decisions.jsonl` and `index-<platform>.json`, mode 0600, when installed and `log` is on |
 | `~/.hermes/skills/graphify/` | graphify's Hermes skill, written by graphify to Hermes's default home |
 | `~/.hermes/plugins/rtk-rewrite/` | rtk's Hermes plugin, written by `rtk init --agent hermes` |
 | `~/.config/opencode/opencode.json` | OpenCode's config, where FreeLLMAPI's `setup-opencode` adds its provider and sets a default model |

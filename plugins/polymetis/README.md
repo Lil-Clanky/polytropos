@@ -18,11 +18,11 @@ Hermes asks whether to enable it, and the default answer is no. Polymetis needs 
 - **Level.** A session gets a level on its first turn that has a skill index to rank: `lean` when a skill reaches `min_score`, otherwise `none`. `full` comes only from `platform_levels`. The level stays for the session, so that a local model gets the same request on every turn and its prompt cache holds. A session that started at `none` because nothing matched moves to `lean` once, on the first later turn that matches a skill.
 - **Log.** One line per turn with names, scores, counts and reasons, never message text.
 
-With the default settings this is all it does. The setting `apply` turns on what it may change.
+With the default settings this is all it does. The setting `apply` turns on what it may change, and an ablation has keys of its own.
 
 ## Settings
 
-Polymetis reads its settings from `plugins.entries.polymetis.settings` in the profile's `config.yaml` at the start of every turn, so a change counts from the next turn. Edit them with `hermes config edit`, for example:
+Polymetis reads its settings from `plugins.entries.polymetis.settings` in the profile's `config.yaml` at the start of every turn, so a change counts from the next turn. Only the start of an ablation waits for a restart, see [Ablation](#ablation). Edit them with `hermes config edit`, for example:
 
 ```yaml
 plugins:
@@ -36,7 +36,7 @@ plugins:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `apply` | `[]` | What Polymetis may change: `tips`, `local_tools`, or both. Empty means decide and log only. |
+| `apply` | `[]` | What Polymetis may change: `tips`, `local_tools`, or both. Empty means decide and log only, apart from an ablation. |
 | `log` | `true` | Write the log and the last skill index per platform. With `false` Polymetis writes no files. |
 | `min_score` | `5` | The score a skill needs for a tip and for a `lean` session, from 0 to 1000. The default comes from the offline measurement in `evals/polymetis`. |
 | `max_tips` | `2` | The most skills one tip names, from 0 to 5 |
@@ -44,7 +44,7 @@ plugins:
 | `block` | `[]` | Skills that are never ranked or tipped |
 | `platform_levels` | `{}` | A fixed level per gateway platform, such as `whatsapp: none` or `cli: full` |
 | `local_tools` | `clarify`, `memory`, `read_file`, `search_files`, `terminal`, `web_search`, `write_file` | The tools a local model keeps at `lean` and `none` |
-| `ablation.share` | `0` | The share of new sessions that run without skills, from 0 to 1 |
+| `ablation.share` | `0` | The share of new sessions that run without skills, from 0 to 1. It starts after a restart of Hermes or the gateway. |
 | `ablation.until` | none | The last day of the ablation, such as `2026-12-31`. Without it the ablation runs until `share` is 0 again. |
 
 A wrong value keeps its default, and Hermes's log names the key without the value.
@@ -61,7 +61,7 @@ The hint names at most `max_tips` skills, and only skills that score at least ha
 
 ### Smaller requests for local models
 
-With `apply: [local_tools]` and `polytropos-router` as the model provider, the router asks Polymetis for the request that a local model gets. Polymetis finds the session by the request's system prompt and first user message, and returns one of four variants.
+With `apply: [local_tools]` and `polytropos-router` as the model provider, the router asks Polymetis for the request that a local model gets. Polymetis finds the session by the request's system prompt, first user message and last user message, as Hermes sent them in that turn, and returns one of four variants. Other requests, such as those of Hermes's background review, go to the model as they are.
 
 | Variant | Tools | Skill index |
 |---|---|---|
@@ -76,11 +76,13 @@ Only local models get these variants. More requests fit a local model this way, 
 
 ### Ablation
 
-An ablation measures whether skills help. While `ablation.share` is above 0 and `ablation.until` has not passed, that share of new sessions, picked by a hash of the session id, runs without skills. An `llm_request` middleware removes the skill index, the sentences that point at `skill_view`, and the tools `skills_list`, `skill_view` and `skill_manage` from every request of those sessions, for every model. The log marks them with `arm: ablation`, and the report compares both groups.
+An ablation measures whether skills help. While `ablation.share` is above 0 and `ablation.until` has not passed, that share of new sessions, picked by a hash of the session id, runs without skills. An `llm_request` middleware removes the skill index, the sentences that point at `skill_view`, and the tools `skills_list`, `skill_view` and `skill_manage` from the requests of those sessions' turns. It reads the formats Hermes sends to chat completions, Anthropic, the Responses API and Bedrock; a request in another format keeps its skills. The log marks these sessions with `arm: ablation`, and the report compares both groups.
+
+Hermes copies every request once more for each `llm_request` middleware, so Polymetis adds its middleware only when Hermes loads it while an ablation is set. After setting `ablation.share`, restart Hermes or the gateway; until then, Hermes's log says that the ablation waits for a restart. When the ablation ends, by `until` or a `share` of 0, its sessions get their skills back from their next turn.
 
 ## Files
 
-Polymetis writes only in the profile's plugin data folder, `<HERMES_HOME>/plugin-data/polymetis/`, and only while `log` is on. Both files have mode 0600.
+Polymetis writes only in the data folder that Hermes gives it in the profile, `<HERMES_HOME>/plugin-data/agent-plugin-polymetis-1717164d/`, and only while `log` is on. The report ends with the log's path. Both files have mode 0600.
 
 - `decisions.jsonl`: one line per turn. At 5 MB it moves to `decisions.jsonl.1`, which replaces the older one.
 - `index-<platform>.json`: the names, categories and descriptions of the skills in the last index that Hermes sent on that platform. With it, the first turn of a new session can be ranked before Hermes sends that session's first request, also after a restart.
@@ -97,16 +99,16 @@ A line of `decisions.jsonl` has these fields.
 | `level`, `level_reason` | The session's level, `null` before it has one, and why: `match`, `no_match`, `upgrade`, `platform:<name>` or `ablation` |
 | `arm` | `normal` or `ablation` |
 | `apply` | The features that were on |
-| `offered_skills`, `offered_tools` | How many skills the index held and how many tools the request had |
+| `offered_skills`, `offered_tools` | How many skills the index held, and how many tools the request had. Hermes passes a large request on in short form; then this is Hermes's count of the agent's tools. |
 | `candidates` | The 5 best skills with their scores |
 | `tip`, `tip_given` | The skills a tip would name, and whether it was sent |
 | `local`, `chosen` | The variant prepared for a local model, and the skills a `lean` local request keeps |
-| `used_skills`, `used_tools`, `tool_errors` | The skills loaded with `skill_view`, the tool calls per tool, and how many failed |
+| `used_skills`, `used_tools`, `tool_errors` | The skills from the index that the model loaded with `skill_view`; the tool calls per tool, where a name that does not look like a tool's counts as `other`; and how many calls failed |
 | `api_calls`, `tokens_in`, `tokens_out` | Requests in the turn and the token counts the provider reported |
 | `duration_ms`, `outcome` | The turn's length, and `completed`, `failed`, `interrupted` or Hermes's exit reason |
 | `correction`, `repeat` | Whether the message starts like a correction, with words such as "no", "actually", "nee" or "klopt niet", and whether it and the message before share at least 70% of their words |
 
-Polymetis keeps the text of the current and the previous message in memory only, for the search and these two fields. It makes no network calls.
+Polymetis keeps the text of the current and the previous message in memory only, for the search and these two fields. It makes no network calls. Hermes's background review, which looks back at a turn with the same session id, counts in no turn.
 
 ## Report
 

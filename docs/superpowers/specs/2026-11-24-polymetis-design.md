@@ -95,28 +95,34 @@ turn, so they would be an opt-in of their own.
   you need it.</skill-hint>` when the level is not `none` and a skill reaches `min_score`.
 - `local_tools`: Polymetis registers a request shaper with `polytropos-router`. Before the router
   sends a request to a local model, it asks the shaper for that model's request. The shaper finds
-  the session through a fingerprint of the request (the system prompt and the first user message),
-  which it recorded in `pre_api_request`, and builds the session's variant:
+  the session through a fingerprint of the request (the system prompt, the first user message and
+  the last one), which it recorded in `pre_api_request` for the turn's own requests, and builds the
+  session's variant:
   - keep only the tools in `local_tools` (plus `skill_view` at `lean`);
   - at `none` and `bare`, remove the skill index block and every sentence that points at
     `skill_view(`; at `lean`, keep the block with the session's skills only;
   - remove `<skill-hint>` blocks from user messages, so the local model does not see tips for skills
     it cannot load.
   The variant is deterministic per session, so the local model's prompt cache holds across turns.
-  Requests without a known session, such as Hermes's auxiliary calls, stay as they are.
+  Requests without a known session, such as Hermes's auxiliary calls and its background review,
+  stay as they are.
 
 ## Ablation
 
 With `ablation.share` above 0 and before `ablation.until`, that share of new sessions runs without
 skills: an `llm_request` middleware removes the skill index, the pointers to `skill_view` and the
-skill tools (`skills_list`, `skill_view`, `skill_manage`) from every request of the session, for any
-provider. The log marks those sessions `arm: ablation`, and the report compares both arms. The
+skill tools (`skills_list`, `skill_view`, `skill_manage`) from the requests of the session's turns, in
+the formats of chat completions, Anthropic, the Responses API and Bedrock. Hermes deep-copies every
+request for each `llm_request` middleware, so Polymetis registers it only when an ablation is set
+while Hermes loads the plugin; a new ablation starts after a restart, and an ended one gives its
+sessions their skills back from the next turn. The log marks those sessions `arm: ablation`, and the
+report compares both arms. The
 report proposes an ablation when a model it has not seen before shows up in the log, or 90 days after
 the last one.
 
 ## Log
 
-`decisions.jsonl` in the plugin's data folder (`<HERMES_HOME>/plugin-data/polymetis/`), mode 0600,
+`decisions.jsonl` in the plugin's data folder (`<HERMES_HOME>/plugin-data/agent-plugin-polymetis-1717164d/`), mode 0600,
 one line per turn, rotated to `decisions.jsonl.1` above 5 MB. It holds names, numbers and reasons,
 never message text:
 
