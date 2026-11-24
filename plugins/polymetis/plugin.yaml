@@ -1,0 +1,9 @@
+name: polymetis
+kind: standalone
+version: 0.1.0
+requires_hermes: ">=0.23.2"
+description: Decides per session which skills and tools a model gets, from none to Hermes's full set, and logs it
+author: Lil-Clanky
+manifest_version: 2
+api_version: 1
+provides_hooks: [pre_llm_call, pre_api_request, post_api_request, post_tool_call, on_session_end]
