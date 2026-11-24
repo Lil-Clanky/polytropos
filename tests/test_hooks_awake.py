@@ -106,16 +106,19 @@ def test_commands_and_max_hold():
     assert mac.procs[0].argv == ["caffeinate", "-i", "-t", "60"]
     assert lin.procs[0].argv == ["systemd-inhibit", "--what=idle:sleep", "--who=polytropos",
                                  "--why=Hermes turn", "sleep", "7200"]
-    assert win.procs[0].argv == [sys.executable, "-c", "import ctypes, time; "
+    assert win.procs[0].argv == [sys.executable, "-I", "-c", "import ctypes, time; "
                                  "ctypes.windll.kernel32.SetThreadExecutionState(0x80000001); time.sleep(60)"]
     assert other.procs == []
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the hold calls the Windows API")
-def test_windows_hold_runs_until_its_time_is_up():
+def test_windows_hold_runs_until_its_time_is_up_and_ignores_the_working_folder(tmp_path, monkeypatch):
+    (tmp_path / "ctypes.py").write_text("open('planted', 'w').close()\n")  # what -c would import from here
+    monkeypatch.chdir(tmp_path)
     holder = awake.AwakeHolder(max_hold_s=0)
     holder.acquire("a")
     assert holder._proc.wait(30) == 0  # the child Python ran SetThreadExecutionState without an error
+    assert not (tmp_path / "planted").exists()
 
 
 def test_missing_program_holds_nothing_and_logs_once(caplog):

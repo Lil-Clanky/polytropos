@@ -24,8 +24,9 @@ class AwakeHolder:
             self._argv = ["systemd-inhibit", "--what=idle:sleep", "--who=polytropos",
                           "--why=Hermes turn", "sleep", hold]
         elif platform == "win32":
-            # ES_CONTINUOUS | ES_SYSTEM_REQUIRED keeps Windows from idle sleep until this child Python ends
-            self._argv = [sys.executable, "-c", "import ctypes, time; "
+            # ES_CONTINUOUS | ES_SYSTEM_REQUIRED keeps Windows from idle sleep until this child Python ends.
+            # -I: a ctypes.py or time.py in Hermes's working folder must not be imported in its place.
+            self._argv = [sys.executable, "-I", "-c", "import ctypes, time; "
                           f"ctypes.windll.kernel32.SetThreadExecutionState(0x80000001); time.sleep({hold})"]
             self._flags = 0x08000000  # CREATE_NO_WINDOW: a gateway without a console gets no window for it
         else:
