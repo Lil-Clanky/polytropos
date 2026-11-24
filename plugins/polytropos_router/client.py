@@ -28,6 +28,7 @@ from .toolcheck import broken_tool_calls
 DECISIONS = DecisionCache()  # shared by every client: Hermes builds several per session
 WATCHDOG_INTERVAL_S = 2.0
 MATRIX_TTL_S = 300.0  # a failed matrix fetch can take 10 s, so all clients together try at most this often
+HOOKS_MODULE = "polytropos_router_hooks"  # where other plugins, such as Polymetis, put request hooks
 logger = logging.getLogger("hermes_plugins.polytropos_router")
 _matrices: dict[Callable[[], canary.Matrix], tuple[float, canary.Matrix]] = {}  # loader -> (loaded at, matrix)
 _matrices_lock = threading.Lock()
@@ -49,10 +50,42 @@ class _Call:
     slot: Slot | None = None
     retried: bool = False
     fell_back_from: list[str] = field(default_factory=list)
+    skipped: list[dict] = field(default_factory=list)
+    shaped: dict[str, tuple[dict, str | None]] = field(default_factory=dict)  # local slot -> (request, variant)
+    started: float = field(default_factory=time.monotonic)
 
 
 def _label(slot: Slot) -> str:
     return f"{slot.upstream}/{slot.model}"
+
+
+def _need(kwargs: dict) -> int:
+    """The tokens a request needs: its estimate and room for the reply."""
+    return estimate_tokens(kwargs.get("messages") or [], kwargs.get("tools")) + (kwargs.get("max_tokens") or 1024)
+
+
+@functools.lru_cache(maxsize=32)
+def _warn_hook(name: str, error: str) -> None:
+    logger.warning("polytropos-router: the local_request hook %s failed: %s", name, error)
+
+
+def _shape(kwargs: dict, slot: Slot, size: int) -> tuple[dict, str | None]:
+    """A local slot's request after the ``local_request`` hooks, and the variant the hook named. The
+    first hook that returns a request wins; a hook that fails is skipped."""
+    hooks = getattr(sys.modules.get(HOOKS_MODULE), "local_request", None)
+    if not isinstance(hooks, dict) or not hooks:
+        return kwargs, None
+    info = {"upstream": slot.upstream, "model": slot.model, "window": size,
+            "fits": lambda request: _need(request) <= size}
+    for name, hook in list(hooks.items()):
+        try:
+            out = hook(kwargs, info)
+        except Exception as error:  # a hook must never stop a request
+            _warn_hook(str(name), type(error).__name__)
+            continue
+        if isinstance(out, dict) and isinstance(out.get("request"), dict):
+            return out["request"], str(out.get("variant") or name)
+    return kwargs, None
 
 
 def _falls_back(error: Exception) -> bool:
@@ -219,7 +252,7 @@ class RouterClient:
 
     def _classify(self, text: str) -> str | None:
         slot = self.cfg.classifier
-        if slot is None or not self._usable(slot, 0):  # a local classifier passes the guard and fit checks too
+        if slot is None or self._unusable(slot, 0):  # a local classifier passes the guard and fit checks too
             return None
         create = lambda **kw: self._start(kw, slot)[0]  # noqa: E731  (a local one also runs under the watchdog)
         return classify(create, slot, text, max_tokens=self.cfg.classifier_max_tokens,
@@ -230,20 +263,41 @@ class RouterClient:
         chain = cfg.routes.get(decision.tier) or cfg.routes[cfg.default_route]
         if decision.tier == "simple":
             chain += cfg.routes.get("complex", ())
-        need = estimate_tokens(call.kwargs.get("messages") or [], tools) + (call.kwargs.get("max_tokens") or 1024)
-        hard = [s for s in dict.fromkeys(chain) if self._usable(s, need)]
+        hard = []
+        for s in dict.fromkeys(chain):
+            local = self.cfg.upstreams[s.upstream].local  # only local slots have hard filters
+            why = local and self._unusable(s, _need(self._kwargs_for(call, s)))
+            if why:
+                call.skipped.append({"slot": _label(s), "why": why})
+            else:
+                hard.append(s)
         matrix, results = functools.partial(_matrix, self._matrix_loader), functools.cache(self._local_results)
         slots = [s for s in hard if not tools or self._canary_ok(s, matrix, results)] or hard
+        call.skipped += [{"slot": _label(s), "why": "canary"} for s in hard if s not in slots]  # kept as last resort
         if decision.pinned in slots:  # only among the slots that pass, so a demoted one stays last
             slots.remove(decision.pinned)
             slots.insert(0, decision.pinned)
         return slots + [s for s in hard if s not in slots]  # a failing canary demotes a slot to the last resort
 
-    def _usable(self, slot: Slot, need: int) -> bool:
-        """The hard filters, for local slots: memory guard, window and fit."""
+    def _unusable(self, slot: Slot, need: int) -> str | None:
+        """Why a local slot fails the hard filters (``window``, ``guard`` or ``fit``), else None."""
         up = self.cfg.upstreams[slot.upstream]
-        return not up.local or (need <= window(self.cfg, slot) and guard.judge(self._guard_read()).allowed
-                                and self._fit_check(up, slot.model) is not False)
+        if not up.local:
+            return None
+        if need > window(self.cfg, slot):
+            return "window"
+        if not guard.judge(self._guard_read()).allowed:
+            return "guard"
+        return "fit" if self._fit_check(up, slot.model) is False else None
+
+    def _kwargs_for(self, call: _Call, slot: Slot) -> dict:
+        """The request a slot gets: for a local slot, what the ``local_request`` hooks made of it."""
+        if not self.cfg.upstreams[slot.upstream].local:
+            return call.kwargs
+        label = _label(slot)
+        if label not in call.shaped:
+            call.shaped[label] = _shape(call.kwargs, slot, window(self.cfg, slot))
+        return call.shaped[label][0]
 
     def _canary_ok(self, slot: Slot, matrix: Callable[[], canary.Matrix],
                    results: Callable[[], dict[str, str]]) -> bool:
@@ -258,7 +312,7 @@ class RouterClient:
         last: Exception | None = None
         for i, slot in enumerate(slots):
             try:
-                return (i, *self._start(call.kwargs, slot))
+                return (i, *self._start(self._kwargs_for(call, slot), slot))
             except _Refused:
                 continue
             except Exception as error:
@@ -293,7 +347,12 @@ class RouterClient:
     def _trace(self, call: _Call) -> None:
         if not self.cfg.save_traces:
             return
+        sent = self._kwargs_for(call, call.slot)
         record = {"time": time.time(), "tier": call.decision.tier, "reason": call.decision.reason,
-                  "slot": _label(call.slot), "retried": call.retried, "fell_back_from": call.fell_back_from}
+                  "slot": _label(call.slot), "retried": call.retried, "fell_back_from": call.fell_back_from,
+                  "skipped": call.skipped, "tokens_est": estimate_tokens(sent.get("messages") or [], sent.get("tools")),
+                  "duration_ms": int((time.monotonic() - call.started) * 1000)}
+        if variant := call.shaped.get(_label(call.slot), (None, None))[1]:
+            record["shaped"] = variant
         with contextlib.suppress(OSError):  # a trace that cannot be written must not fail the turn
             trace.write_trace(self._trace_path or state_dir() / "router-traces.jsonl", record)
