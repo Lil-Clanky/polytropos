@@ -193,11 +193,13 @@ def test_the_background_review_is_neither_counted_nor_shaped(pm, tmp_path):
     slot = {"fits": lambda r: True}
     assert hooks.on_llm_request(request={"messages": review}, session_id="s1", turn_id="review") is None
     assert hooks.shape_local({"messages": review, "tools": TOOLS}, slot) is None
+    hooks.on_session_end(session_id="s1", turn_id="review", completed=True)  # the end of another turn
     own = messages("Merge the other pull request too")
     api(own)  # the user's own request, which is counted and shaped
     assert hooks.on_llm_request(request={"messages": own}, session_id="s1", turn_id="t") is not None
     assert hooks.shape_local({"messages": own, "tools": TOOLS}, slot) is not None
     hooks.on_session_end(session_id="s1", completed=True)
+    assert len(records(tmp_path)) == 2
     rec = records(tmp_path)[-1]
     assert (rec["api_calls"], rec["tokens_in"], rec["used_tools"], rec["answered_by"]) == (1, 120, {}, ["m-answered"])
 
@@ -214,12 +216,17 @@ def test_only_index_skills_and_tool_names_reach_the_log(pm, tmp_path):
     assert SECRET not in (tmp_path / "data" / log.NAME).read_text(encoding="utf-8")
 
 
-def test_offered_tools_falls_back_to_hermes_count_for_a_large_request(pm, tmp_path):
+@pytest.mark.parametrize("request_, expected", [
+    ({"body": {"tools": TOOLS[:3]}}, 3),
+    ({"body": {"tools": TOOLS[:3] + [{"_truncated_items": 57}]}}, 60),  # Hermes kept 50 items of a long list
+    ({"_truncated": True}, 42),  # Hermes passed the request on in short form: its own count
+])
+def test_offered_tools_counts_the_tools_of_a_shortened_request(pm, tmp_path, request_, expected):
     start("Please merge my pull request")
     hooks.on_pre_api_request(session_id="s1", system_prompt=INDEX, request_messages=messages("hi"),
-                             request={"_truncated": True}, tool_count=42)
+                             request=request_, tool_count=42)
     hooks.on_session_end(session_id="s1", completed=True)
-    assert records(tmp_path)[0]["offered_tools"] == 42
+    assert records(tmp_path)[0]["offered_tools"] == expected
 
 
 def test_sessions_saving_the_index_at_once_leave_a_whole_file(pm, tmp_path):
@@ -238,6 +245,15 @@ def test_sessions_saving_the_index_at_once_leave_a_whole_file(pm, tmp_path):
     rows = json.loads((tmp_path / "data" / "index-cli.json").read_text(encoding="utf-8"))
     assert errors == [] and [r["name"] for r in rows] == [s.name for s in skills[:len(rows)]]
     assert [p.name for p in (tmp_path / "data").iterdir()] == ["index-cli.json"]
+
+
+def test_a_failed_index_write_leaves_no_temporary_file(pm, tmp_path, monkeypatch):
+    def refuse(src, dst):
+        raise PermissionError("the file is open in another process")  # what Windows does
+    monkeypatch.setattr(os, "replace", refuse)
+    with pytest.raises(PermissionError):
+        hooks._save_catalog("cli", tuple(catalog.parse_index(INDEX)))
+    assert list((tmp_path / "data").iterdir()) == []
 
 
 def router_request(text):

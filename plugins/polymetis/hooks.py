@@ -112,10 +112,14 @@ def _save_catalog(platform: str, skills: tuple) -> None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # the gateway and a CLI may share the folder
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump([dataclasses.asdict(s) for s in skills], handle)
-        os.replace(tmp, path)
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump([dataclasses.asdict(s) for s in skills], handle)
+            os.replace(tmp, path)  # Windows refuses while another process reads the file; a later request tries again
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
         _saved[path] = skills
 
 
@@ -126,6 +130,14 @@ def _turn(session: Session | None, turn_id: Any) -> Turn | None:
     if turn is None or (turn_id and turn.turn_id and turn_id != turn.turn_id):
         return None
     return turn
+
+
+def _count(items: list) -> int:
+    """The length of a list in Hermes's hook payload. For a large request Hermes keeps the first 50 items
+    of a list and adds ``{"_truncated_items": n}`` for the rest."""
+    last = items[-1] if items else None
+    left_out = last.get("_truncated_items") if isinstance(last, dict) and len(last) == 1 else None
+    return len(items) - 1 + left_out if isinstance(left_out, int) else len(items)
 
 
 def _search(s: Settings, session: Session, turn: Turn) -> None:
@@ -195,8 +207,9 @@ def on_pre_api_request(session_id: str = "", turn_id: str = "", platform: str = 
         STORE.remember_request(request_messages, session_id)
         turn.api_calls += 1
         turn.offered_skills = len(found) if found is not None else 0
-        # Hermes passes a large request on in short form, without its tools; tool_count is its own count
-        turn.offered_tools = len(tools) if isinstance(tools, list) else \
+        # the request's own tools, after any middleware; tool_count, Hermes's count of the agent's tools,
+        # for a request Hermes passes on only in short form
+        turn.offered_tools = _count(tools) if isinstance(tools, list) else \
             tool_count if isinstance(tool_count, int) else None
         if session.level is None:  # no index was known when the turn began; decide with this one
             _search(_settings, session, turn)
@@ -259,14 +272,15 @@ def _record(session: Session, turn: Turn, s: Settings, outcome: str) -> dict:
 
 
 @_safe
-def on_session_end(session_id: str = "", completed: Any = None, failed: Any = None, interrupted: Any = None,
-                   turn_exit_reason: Any = None, **kwargs) -> None:
+def on_session_end(session_id: str = "", turn_id: str = "", completed: Any = None, failed: Any = None,
+                   interrupted: Any = None, turn_exit_reason: Any = None, **kwargs) -> None:
     """Hermes fires this after every turn (one ``run_conversation``); the turn's record is written here."""
     session = STORE.get(session_id) if session_id else None
-    if session is None or session.current is None:
-        return
     with STORE.lock:
-        turn, session.current = session.current, None
+        turn = _turn(session, turn_id)
+        if turn is None:  # no turn in progress, or the late end of another one
+            return
+        session.current = None
         session.last_text, session.text = session.text, ""
         outcome = ("interrupted" if interrupted else "failed" if failed else "completed" if completed
                    else str(turn_exit_reason or "unknown"))
