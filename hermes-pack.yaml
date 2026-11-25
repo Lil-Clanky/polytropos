@@ -7,7 +7,7 @@
 name: polytropos
 description: Model routing, FreeLLMAPI and token savings for Hermes Agent
 author: Lil-Clanky
-version: 0.2.1
+version: 0.3.0
 plugins:
   - repo: Lil-Clanky/polytropos
     ref: 02ab112481f8a680c731d6a78727df182af89792
@@ -16,7 +16,7 @@ plugins:
     ref: 02ab112481f8a680c731d6a78727df182af89792
     subdir: plugins/polytropos_router
   - repo: Lil-Clanky/polymetis
-    ref: f977775d5cbcbfa16711ad54597a2dfeeefe1390
+    ref: 0885db43f32d7d1db7558add410708532ed058f5
   - repo: DietrichGebert/ponytail
     ref: 7801d061243d7b753bad0e0b3c057cd250b11755
   - repo: obra/superpowers
