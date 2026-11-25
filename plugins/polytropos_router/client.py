@@ -1,9 +1,11 @@
 """The client the router provider hands to Hermes: one tier per turn, then the first usable model."""
 
 import contextlib
+import copy
 import functools
 import logging
 import os
+import re
 import socket
 import sys
 import threading
@@ -29,6 +31,7 @@ DECISIONS = DecisionCache()  # shared by every client: Hermes builds several per
 WATCHDOG_INTERVAL_S = 2.0
 MATRIX_TTL_S = 300.0  # a failed matrix fetch can take 10 s, so all clients together try at most this often
 HOOKS_MODULE = "polytropos_router_hooks"  # where other plugins, such as Polymetis, put request hooks
+VARIANT = re.compile(r"[A-Za-z0-9_.-]{1,32}")  # a hook's name for its request, as traces take it: no message text
 logger = logging.getLogger("hermes_plugins.polytropos_router")
 _matrices: dict[Callable[[], canary.Matrix], tuple[float, canary.Matrix]] = {}  # loader -> (loaded at, matrix)
 _matrices_lock = threading.Lock()
@@ -71,7 +74,8 @@ def _warn_hook(name: str, error: str) -> None:
 
 def _shape(kwargs: dict, slot: Slot, size: int) -> tuple[dict, str | None]:
     """A local slot's request after the ``local_request`` hooks, and the variant the hook named. The
-    first hook that returns a request wins; a hook that fails is skipped."""
+    first hook that returns a request wins; a hook that fails, or returns a request the router cannot
+    size, is skipped. Each hook gets a copy, so what it changes reaches no other slot."""
     hooks = getattr(sys.modules.get(HOOKS_MODULE), "local_request", None)
     if not isinstance(hooks, dict) or not hooks:
         return kwargs, None
@@ -79,12 +83,19 @@ def _shape(kwargs: dict, slot: Slot, size: int) -> tuple[dict, str | None]:
             "fits": lambda request: _need(request) <= size}
     for name, hook in list(hooks.items()):
         try:
-            out = hook(kwargs, info)
+            out = hook(copy.deepcopy(kwargs), info)
+            request = out.get("request") if isinstance(out, dict) else None
+            if not isinstance(request, dict):
+                continue
+            request = {k: v for k, v in request.items() if k != "stream"}  # the router streams as the caller asked
+            if "stream" in kwargs:
+                request["stream"] = kwargs["stream"]
+            _need(request)
         except Exception as error:  # a hook must never stop a request
             _warn_hook(str(name), type(error).__name__)
             continue
-        if isinstance(out, dict) and isinstance(out.get("request"), dict):
-            return out["request"], str(out.get("variant") or name)
+        variant = out.get("variant")
+        return request, variant if isinstance(variant, str) and VARIANT.fullmatch(variant) else str(name)
     return kwargs, None
 
 
@@ -316,7 +327,10 @@ class RouterClient:
             except _Refused:
                 continue
             except Exception as error:
-                if self.is_closed or not _falls_back(error):
+                # a 400 or 422 for a request that a hook changed says nothing about the request as it came
+                changed = call.shaped.get(_label(slot), (None, None))[1] is not None and \
+                    isinstance(error, (openai.BadRequestError, openai.UnprocessableEntityError))
+                if self.is_closed or not (_falls_back(error) or changed):
                     raise
                 last = error
                 call.fell_back_from.append(_label(slot))

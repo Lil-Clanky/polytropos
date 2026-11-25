@@ -694,3 +694,65 @@ def test_a_failing_or_silent_hook_leaves_the_request_alone(local, cloud, hooks, 
         reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"))
     assert reply.choices[0].message.content == "from local" and sent(local, MODEL) == ["hoi"]
     assert "local_request hook boom failed: ValueError" in caplog.text and "secret words" not in caplog.text
+
+
+def test_what_a_hook_changes_in_place_stays_out_of_cloud_requests(local, cloud, hooks):
+    def edit(request, slot):
+        request["messages"][-1]["content"] += " EXTRA TEXT FROM HOOK"
+        request["tools"].clear()
+
+    hooks["edit"] = edit
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"status": 429})
+    router(local, cloud).chat.completions.create(model="auto", messages=turn("the original"), tools=list(TOOLS))
+    assert sent(local, MODEL) == ["the original"] and sent(cloud, "auto") == ["the original"]
+    assert [r["tools"] for r in cloud.requests if r.get("model") == "auto"] == [TOOLS]
+
+
+def test_a_hook_whose_request_the_router_cannot_read_is_skipped(local, cloud, hooks, caplog):
+    hooks["bad"] = lambda request, slot: {"request": {**request, "messages": ["not a message"]}}
+    client_mod._warn_hook.cache_clear()
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"content": "from local"})
+    with caplog.at_level(logging.WARNING):
+        reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"))
+    assert reply.choices[0].message.content == "from local" and sent(local, MODEL) == ["hoi"]
+    assert "local_request hook bad failed: AttributeError" in caplog.text
+
+
+@pytest.mark.parametrize("stream, change", [
+    (True, lambda request: {k: v for k, v in request.items() if k != "stream"}),
+    (False, lambda request: {**request, "stream": True}),
+])
+def test_the_router_streams_as_the_caller_asked_whatever_a_hook_returns(local, cloud, hooks, stream, change):
+    hooks["flip"] = lambda request, slot: {"request": change(request), "variant": "lean"}
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"content": "from local"})
+    reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"), stream=stream)
+    assert (text_of(reply) if stream else reply.choices[0].message.content) == "from local"
+
+
+def test_traces_take_only_a_short_name_as_the_variant(local, cloud, tmp_path, hooks):
+    hooks["test"] = lambda request, slot: {"request": request, "variant": "private user words"}
+    cloud.script(CLS, SIMPLE)
+    path = tmp_path / "traces.jsonl"
+    rc = router(local, cloud, config(local, cloud, save_traces=True), trace_path=path)
+    rc.chat.completions.create(model="auto", messages=turn("hoi"))
+    assert json.loads(path.read_text())["shaped"] == "test"
+
+
+def test_a_changed_request_that_the_local_model_rejects_goes_to_the_next_model(local, cloud, hooks):
+    hooks["test"] = lambda request, slot: {"request": {**request, "messages": turn("small")}, "variant": "lean"}
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"status": 400})
+    cloud.script("auto", {"content": "from cloud"})
+    reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("the original"))
+    assert reply.choices[0].message.content == "from cloud" and sent(cloud, "auto") == ["the original"]
+
+
+def test_a_request_as_it_came_that_the_local_model_rejects_goes_to_hermes(local, cloud):
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"status": 400})
+    with pytest.raises(openai.BadRequestError):
+        router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"))
+    assert acted(cloud) == []

@@ -202,13 +202,13 @@ store = sys.modules.setdefault("polytropos_router_hooks", types.ModuleType("poly
 store.__dict__.setdefault("local_request", {})["my-plugin"] = my_hook
 ```
 
-For each local model in the chain, the router calls the hooks in the order they were registered, with the request and a dict of `upstream`, `model`, `window` (the model's `context_window`) and `fits`. `fits(request)` tells whether a request fits that window by the router's own estimate. A hook returns `None` to leave the request alone, or `{"request": ..., "variant": ...}` with a new request and a short name for it. The first hook that returns a request wins. The window fit and the request sent to that model then use it, and the trace names the variant. A hook that raises is skipped, and the router logs the error type once, without the message. Cloud models get the request as the router received it. Without hooks nothing changes.
+For each local model in the chain, the router calls the hooks in the order they were registered, with a copy of the request and a dict of `upstream`, `model`, `window` (the model's `context_window`) and `fits`. `fits(request)` tells whether a request fits that window by the router's own estimate. A hook returns `None` to leave the request alone, or `{"request": ..., "variant": ...}` with a new request and a short name for it. The first hook that returns a request wins. The window fit and the request sent to that model then use it, with the `stream` setting of the request the router received, and the trace names the variant: a name of up to 32 letters, digits, `.`, `_` or `-`, else the hook's key. A hook that raises, or returns a request whose messages the router cannot read, is skipped, and the router logs the error type once, without the message. What a hook changes in its copy reaches no other model, so cloud models get the request as the router received it. Without hooks nothing changes.
 
 The memory guard, the fit check and the canary filter work as before. The router judges broken tool calls against the tools of the request it received, because Hermes can run each of those.
 
 ### Fallback
 
-On a rate limit (HTTP 429), a connection error or timeout, or a server error (HTTP 5xx), the router tries the next model in the chain. Other errors go straight to Hermes. When every model fails this way, Hermes gets the last error. When no model in the chain passes the filters, the error is `polytropos-router: no model in the route can take this request`.
+On a rate limit (HTTP 429), a connection error or timeout, or a server error (HTTP 5xx), the router tries the next model in the chain, and so it does when a local model rejects a request that a hook changed (HTTP 400 or 422). Other errors go straight to Hermes. When every model fails this way, Hermes gets the last error. When no model in the chain passes the filters, the error is `polytropos-router: no model in the route can take this request`.
 
 ### Broken tool calls
 
