@@ -709,15 +709,20 @@ def test_what_a_hook_changes_in_place_stays_out_of_cloud_requests(local, cloud, 
     assert [r["tools"] for r in cloud.requests if r.get("model") == "auto"] == [TOOLS]
 
 
-def test_a_hook_whose_request_the_router_cannot_read_is_skipped(local, cloud, hooks, caplog):
-    hooks["bad"] = lambda request, slot: {"request": {**request, "messages": ["not a message"]}}
+@pytest.mark.parametrize("change, error", [
+    (lambda request: {**request, "messages": ["not a message"]}, "AttributeError"),
+    (lambda request: {k: v for k, v in request.items() if k != "messages"}, "KeyError"),
+    (lambda request: {**request, "messages": None}, "TypeError"),
+])
+def test_a_hook_whose_request_the_router_cannot_read_is_skipped(local, cloud, hooks, caplog, change, error):
+    hooks["bad"] = lambda request, slot: {"request": change(request)}
     client_mod._warn_hook.cache_clear()
     cloud.script(CLS, SIMPLE)
     local.script(MODEL, {"content": "from local"})
     with caplog.at_level(logging.WARNING):
         reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"))
     assert reply.choices[0].message.content == "from local" and sent(local, MODEL) == ["hoi"]
-    assert "local_request hook bad failed: AttributeError" in caplog.text
+    assert f"local_request hook bad failed: {error}" in caplog.text
 
 
 @pytest.mark.parametrize("stream, change", [

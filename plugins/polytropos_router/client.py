@@ -63,8 +63,9 @@ def _label(slot: Slot) -> str:
 
 
 def _need(kwargs: dict) -> int:
-    """The tokens a request needs: its estimate and room for the reply."""
-    return estimate_tokens(kwargs.get("messages") or [], kwargs.get("tools")) + (kwargs.get("max_tokens") or 1024)
+    """The tokens a request needs: its estimate and room for the reply. A request without a list of messages
+    raises, as the router cannot size it and the SDK would refuse it."""
+    return estimate_tokens(kwargs["messages"], kwargs.get("tools")) + (kwargs.get("max_tokens") or 1024)
 
 
 @functools.lru_cache(maxsize=32)
