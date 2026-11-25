@@ -641,6 +641,33 @@ def test_traces_keep_one_older_file(tmp_path, monkeypatch):
     assert json.loads(path.with_name("traces.jsonl.1").read_text()) == {"i": 1}
 
 
+def test_a_second_writer_waits_while_the_trace_file_moves(tmp_path, monkeypatch):
+    path = tmp_path / "traces.jsonl"
+    trace.write_trace(path, {"pad": "x" * 100})
+    monkeypatch.setattr(trace, "MAX_BYTES", 50)
+    replace, second = trace.os.replace, threading.Thread(target=trace.write_trace, args=(path, {"i": 2}))
+
+    def slow_replace(src, dst):  # a second thread writes a trace while the first one moves the file
+        if second.ident is None:
+            second.start()
+            second.join(0.2)
+        replace(src, dst)
+
+    monkeypatch.setattr(trace.os, "replace", slow_replace)
+    trace.write_trace(path, {"i": 1})
+    second.join()
+    assert "pad" in path.with_name("traces.jsonl.1").read_text()
+    assert [json.loads(line) for line in path.read_text().splitlines()] == [{"i": 1}, {"i": 2}]
+
+
+def test_a_traces_duration_counts_the_choice_of_the_tier(local, cloud, tmp_path):
+    cloud.script(CLS, {**SIMPLE, "delay": 0.2})
+    path = tmp_path / "traces.jsonl"
+    rc = router(local, cloud, config(local, cloud, save_traces=True), trace_path=path)
+    rc.chat.completions.create(model="auto", messages=turn("hoi"))
+    assert json.loads(path.read_text())["duration_ms"] >= 200
+
+
 @pytest.fixture
 def hooks(monkeypatch):
     """The request hooks another plugin, such as Polymetis, would register."""
@@ -750,6 +777,14 @@ def test_a_changed_request_that_the_local_model_rejects_goes_to_the_next_model(l
     hooks["test"] = lambda request, slot: {"request": {**request, "messages": turn("small")}, "variant": "lean"}
     cloud.script(CLS, SIMPLE)
     local.script(MODEL, {"status": 400})
+    cloud.script("auto", {"content": "from cloud"})
+    reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("the original"))
+    assert reply.choices[0].message.content == "from cloud" and sent(cloud, "auto") == ["the original"]
+
+
+def test_a_changed_request_that_the_sdk_refuses_goes_to_the_next_model(local, cloud, hooks):
+    hooks["test"] = lambda request, slot: {"request": {**request, "not_a_parameter": 1}, "variant": "lean"}
+    cloud.script(CLS, SIMPLE)
     cloud.script("auto", {"content": "from cloud"})
     reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("the original"))
     assert reply.choices[0].message.content == "from cloud" and sent(cloud, "auto") == ["the original"]

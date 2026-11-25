@@ -216,7 +216,8 @@ class RouterClient:
             return self._clients[name]
 
     def _create(self, **kwargs: Any) -> Any:
-        call = _Call(self._decision(kwargs.get("messages") or []), kwargs)
+        started = time.monotonic()  # the trace's duration counts the choice of the tier too
+        call = _Call(self._decision(kwargs.get("messages") or []), kwargs, started=started)
         slots = self._candidates(call)
         i, result, watchdog = self._first(call, slots)
         slot, rest = slots[i], slots[i + 1:]
@@ -328,9 +329,11 @@ class RouterClient:
             except _Refused:
                 continue
             except Exception as error:
-                # a 400 or 422 for a request that a hook changed says nothing about the request as it came
-                changed = call.shaped.get(_label(slot), (None, None))[1] is not None and \
-                    isinstance(error, (openai.BadRequestError, openai.UnprocessableEntityError))
+                # a request that a hook changed and that the local model (400, 422) or the SDK before sending refused
+                # says nothing about the request as it came
+                refused = isinstance(error, (openai.BadRequestError, openai.UnprocessableEntityError)) or \
+                    not isinstance(error, openai.OpenAIError)
+                changed = call.shaped.get(_label(slot), (None, None))[1] is not None and refused
                 if self.is_closed or not (_falls_back(error) or changed):
                     raise
                 last = error

@@ -208,7 +208,7 @@ The memory guard, the fit check and the canary filter work as before. The router
 
 ### Fallback
 
-On a rate limit (HTTP 429), a connection error or timeout, or a server error (HTTP 5xx), the router tries the next model in the chain, and so it does when a local model rejects a request that a hook changed (HTTP 400 or 422). Other errors go straight to Hermes. When every model fails this way, Hermes gets the last error. When no model in the chain passes the filters, the error is `polytropos-router: no model in the route can take this request`.
+On a rate limit (HTTP 429), a connection error or timeout, or a server error (HTTP 5xx), the router tries the next model in the chain, and so it does when a local model rejects a request that a hook changed (HTTP 400 or 422), or the OpenAI SDK refuses that request before sending it. Other errors go straight to Hermes. When every model fails this way, Hermes gets the last error. When no model in the chain passes the filters, the error is `polytropos-router: no model in the route can take this request`.
 
 ### Broken tool calls
 
