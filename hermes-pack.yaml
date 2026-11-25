@@ -1,5 +1,6 @@
 # Hermes plugin pack for Polytropos. Install with: hermes plugins pack install hermes-pack.yaml
-# The refs of the two own entries are written by scripts/release.py at release time.
+# The refs of the two Lil-Clanky/polytropos entries are written by scripts/release.py at release time.
+# The polymetis ref moves with: python scripts/release.py --repo Lil-Clanky/polymetis --sha <commit>
 # The ponytail and superpowers refs follow versions.lock.
 # Hermes refuses ponytail's plugin.json, on v0.23.2 and later, so the pack install reports the ponytail entry as
 # failed. `hermes polytropos install` tries `hermes plugins install`, which Hermes refuses the same way.
@@ -14,6 +15,8 @@ plugins:
   - repo: Lil-Clanky/polytropos
     ref: 02ab112481f8a680c731d6a78727df182af89792
     subdir: plugins/polytropos_router
+  - repo: Lil-Clanky/polymetis
+    ref: f977775d5cbcbfa16711ad54597a2dfeeefe1390
   - repo: DietrichGebert/ponytail
     ref: 7801d061243d7b753bad0e0b3c057cd250b11755
   - repo: obra/superpowers

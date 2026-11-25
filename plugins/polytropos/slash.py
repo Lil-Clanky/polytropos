@@ -36,7 +36,7 @@ def _last_decision() -> str | None:
     try:
         with open(paths.state_dir() / "router-traces.jsonl", "rb") as f:
             f.seek(0, os.SEEK_END)
-            f.seek(max(0, f.tell() - 65536))  # the last record is near the end of a file that only grows
+            f.seek(max(0, f.tell() - 65536))  # the last record is near the end of the file
             trace = json.loads(f.read().splitlines()[-1])
     except (OSError, IndexError, ValueError):
         trace = None

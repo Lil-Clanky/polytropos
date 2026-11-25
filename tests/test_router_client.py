@@ -5,6 +5,7 @@ import stat
 import sys
 import threading
 import time
+import types
 from types import SimpleNamespace as NS
 from unittest.mock import ANY
 
@@ -15,6 +16,7 @@ import pytest
 from fake_openai import FakeOpenAI
 from test_guard import Fake as FakeOllama
 from polytropos_router import client as client_mod
+from polytropos_router import trace
 from polytropos_router._shared import bridge, guard
 from polytropos_router._shared.bridge import TurnInfo, remember_turn
 from polytropos_router._shared.canary import Cell, Matrix
@@ -238,7 +240,7 @@ def test_trace_file_mode(local, cloud, tmp_path):
     list(rc.chat.completions.create(model="auto", messages=turn("private words") + TOOL_STEP, stream=True))
     assert sys.platform == "win32" or stat.S_IMODE(path.stat().st_mode) == 0o600  # Windows keeps no mode bits
     expected = {"time": ANY, "tier": "simple", "reason": "classifier", "slot": "ollama/llama3.2:3b",
-                "retried": False, "fell_back_from": []}
+                "retried": False, "fell_back_from": [], "skipped": [], "tokens_est": ANY, "duration_ms": ANY}
     assert [json.loads(line) for line in path.read_text().splitlines()] == [expected, expected]
     assert "private" not in path.read_text()
 
@@ -604,3 +606,193 @@ def test_kwargs_reach_the_upstream_unchanged(local, cloud):
     classifier_call, acting_call = seen
     assert classifier_call["model"] == CLS and "stream" not in classifier_call
     assert acting_call == {**kwargs, "model": MODEL}
+
+
+@pytest.mark.parametrize("kw, text, why", [
+    ({}, "x" * 40_000, "window"),
+    ({"guard_read": lambda: WARNING}, "hoi", "guard"),
+    ({"fit_check": lambda up, model: False}, "hoi", "fit"),
+])
+def test_traces_say_why_a_local_slot_was_skipped(local, cloud, tmp_path, kw, text, why):
+    cloud.script(CLS, SIMPLE)
+    path = tmp_path / "traces.jsonl"
+    rc = router(local, cloud, config(local, cloud, save_traces=True), trace_path=path, **kw)
+    rc.chat.completions.create(model="auto", messages=turn(text))
+    record = json.loads(path.read_text())
+    assert record["skipped"] == [{"slot": "ollama/llama3.2:3b", "why": why}] and record["slot"] == "freellmapi/auto"
+    assert record["tokens_est"] > 0 and record["duration_ms"] >= 0 and "shaped" not in record
+
+
+def test_traces_name_a_canary_demotion(local, cloud, tmp_path):
+    cloud.script(CLS, SIMPLE)
+    matrix = Matrix([Cell("0.40.16", MODEL, "A6", "fail")])
+    path = tmp_path / "traces.jsonl"
+    rc = router(local, cloud, config(local, cloud, save_traces=True), trace_path=path, matrix_loader=lambda: matrix)
+    rc.chat.completions.create(model="auto", messages=turn("write it down"), tools=TOOLS)
+    assert json.loads(path.read_text())["skipped"] == [{"slot": "ollama/llama3.2:3b", "why": "canary"}]
+
+
+def test_traces_keep_one_older_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(trace, "MAX_BYTES", 5)
+    path = tmp_path / "traces.jsonl"
+    for i in range(3):
+        trace.write_trace(path, {"i": i})
+    assert json.loads(path.read_text()) == {"i": 2}
+    assert json.loads(path.with_name("traces.jsonl.1").read_text()) == {"i": 1}
+
+
+def test_a_second_writer_waits_while_the_trace_file_moves(tmp_path, monkeypatch):
+    path = tmp_path / "traces.jsonl"
+    trace.write_trace(path, {"pad": "x" * 100})
+    monkeypatch.setattr(trace, "MAX_BYTES", 50)
+    replace, second = trace.os.replace, threading.Thread(target=trace.write_trace, args=(path, {"i": 2}))
+
+    def slow_replace(src, dst):  # a second thread writes a trace while the first one moves the file
+        if second.ident is None:
+            second.start()
+            second.join(0.2)
+        replace(src, dst)
+
+    monkeypatch.setattr(trace.os, "replace", slow_replace)
+    trace.write_trace(path, {"i": 1})
+    second.join()
+    assert "pad" in path.with_name("traces.jsonl.1").read_text()
+    assert [json.loads(line) for line in path.read_text().splitlines()] == [{"i": 1}, {"i": 2}]
+
+
+def test_a_traces_duration_counts_the_choice_of_the_tier(local, cloud, tmp_path):
+    cloud.script(CLS, {**SIMPLE, "delay": 0.2})
+    path = tmp_path / "traces.jsonl"
+    rc = router(local, cloud, config(local, cloud, save_traces=True), trace_path=path)
+    rc.chat.completions.create(model="auto", messages=turn("hoi"))
+    assert json.loads(path.read_text())["duration_ms"] >= 200
+
+
+@pytest.fixture
+def hooks(monkeypatch):
+    """The request hooks another plugin, such as Polymetis, would register."""
+    store = types.ModuleType(client_mod.HOOKS_MODULE)
+    store.local_request = {}
+    monkeypatch.setitem(sys.modules, client_mod.HOOKS_MODULE, store)
+    return store.local_request
+
+
+def sent(fake, model):
+    return [r["messages"][-1]["content"] for r in fake.requests if r["_path"].endswith("/chat/completions")
+            and r["model"] == model]
+
+
+def test_a_local_request_hook_can_make_a_request_fit(local, cloud, tmp_path, hooks):
+    seen = []
+
+    def shrink(request, slot):
+        seen.append((slot["upstream"], slot["model"], slot["window"], slot["fits"](request)))
+        return {"request": {**request, "messages": turn("hoi")}, "variant": "lean"}
+
+    hooks["test"] = shrink
+    cloud.script(CLS, SIMPLE)
+    path = tmp_path / "traces.jsonl"
+    rc = router(local, cloud, config(local, cloud, save_traces=True), trace_path=path)
+    rc.chat.completions.create(model="auto", messages=turn("x" * 40_000), tools=TOOLS)
+    assert seen == [("ollama", MODEL, 8192, False)]
+    assert sent(local, MODEL) == ["hoi"] and acted(cloud) == []
+    record = json.loads(path.read_text())
+    assert (record["slot"], record["shaped"], record["skipped"]) == ("ollama/llama3.2:3b", "lean", [])
+
+
+def test_cloud_slots_get_the_request_as_it_came(local, cloud, hooks):
+    hooks["test"] = lambda request, slot: {"request": {**request, "messages": turn("small")}, "variant": "none"}
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"status": 429})
+    router(local, cloud).chat.completions.create(model="auto", messages=turn("the original"))
+    assert sent(local, MODEL) == ["small"] and sent(cloud, "auto") == ["the original"]
+
+
+def test_a_failing_or_silent_hook_leaves_the_request_alone(local, cloud, hooks, caplog):
+    def boom(request, slot):
+        raise ValueError("secret words")
+
+    hooks["boom"] = boom
+    hooks["silent"] = lambda request, slot: None
+    client_mod._warn_hook.cache_clear()
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"content": "from local"})
+    with caplog.at_level(logging.WARNING):
+        reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"))
+    assert reply.choices[0].message.content == "from local" and sent(local, MODEL) == ["hoi"]
+    assert "local_request hook boom failed: ValueError" in caplog.text and "secret words" not in caplog.text
+
+
+def test_what_a_hook_changes_in_place_stays_out_of_cloud_requests(local, cloud, hooks):
+    def edit(request, slot):
+        request["messages"][-1]["content"] += " EXTRA TEXT FROM HOOK"
+        request["tools"].clear()
+
+    hooks["edit"] = edit
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"status": 429})
+    router(local, cloud).chat.completions.create(model="auto", messages=turn("the original"), tools=list(TOOLS))
+    assert sent(local, MODEL) == ["the original"] and sent(cloud, "auto") == ["the original"]
+    assert [r["tools"] for r in cloud.requests if r.get("model") == "auto"] == [TOOLS]
+
+
+@pytest.mark.parametrize("change, error", [
+    (lambda request: {**request, "messages": ["not a message"]}, "AttributeError"),
+    (lambda request: {k: v for k, v in request.items() if k != "messages"}, "KeyError"),
+    (lambda request: {**request, "messages": None}, "TypeError"),
+])
+def test_a_hook_whose_request_the_router_cannot_read_is_skipped(local, cloud, hooks, caplog, change, error):
+    hooks["bad"] = lambda request, slot: {"request": change(request)}
+    client_mod._warn_hook.cache_clear()
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"content": "from local"})
+    with caplog.at_level(logging.WARNING):
+        reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"))
+    assert reply.choices[0].message.content == "from local" and sent(local, MODEL) == ["hoi"]
+    assert f"local_request hook bad failed: {error}" in caplog.text
+
+
+@pytest.mark.parametrize("stream, change", [
+    (True, lambda request: {k: v for k, v in request.items() if k != "stream"}),
+    (False, lambda request: {**request, "stream": True}),
+])
+def test_the_router_streams_as_the_caller_asked_whatever_a_hook_returns(local, cloud, hooks, stream, change):
+    hooks["flip"] = lambda request, slot: {"request": change(request), "variant": "lean"}
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"content": "from local"})
+    reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"), stream=stream)
+    assert (text_of(reply) if stream else reply.choices[0].message.content) == "from local"
+
+
+def test_traces_take_only_a_short_name_as_the_variant(local, cloud, tmp_path, hooks):
+    hooks["test"] = lambda request, slot: {"request": request, "variant": "private user words"}
+    cloud.script(CLS, SIMPLE)
+    path = tmp_path / "traces.jsonl"
+    rc = router(local, cloud, config(local, cloud, save_traces=True), trace_path=path)
+    rc.chat.completions.create(model="auto", messages=turn("hoi"))
+    assert json.loads(path.read_text())["shaped"] == "test"
+
+
+def test_a_changed_request_that_the_local_model_rejects_goes_to_the_next_model(local, cloud, hooks):
+    hooks["test"] = lambda request, slot: {"request": {**request, "messages": turn("small")}, "variant": "lean"}
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"status": 400})
+    cloud.script("auto", {"content": "from cloud"})
+    reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("the original"))
+    assert reply.choices[0].message.content == "from cloud" and sent(cloud, "auto") == ["the original"]
+
+
+def test_a_changed_request_that_the_sdk_refuses_goes_to_the_next_model(local, cloud, hooks):
+    hooks["test"] = lambda request, slot: {"request": {**request, "not_a_parameter": 1}, "variant": "lean"}
+    cloud.script(CLS, SIMPLE)
+    cloud.script("auto", {"content": "from cloud"})
+    reply = router(local, cloud).chat.completions.create(model="auto", messages=turn("the original"))
+    assert reply.choices[0].message.content == "from cloud" and sent(cloud, "auto") == ["the original"]
+
+
+def test_a_request_as_it_came_that_the_local_model_rejects_goes_to_hermes(local, cloud):
+    cloud.script(CLS, SIMPLE)
+    local.script(MODEL, {"status": 400})
+    with pytest.raises(openai.BadRequestError):
+        router(local, cloud).chat.completions.create(model="auto", messages=turn("hoi"))
+    assert acted(cloud) == []

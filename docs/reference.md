@@ -155,7 +155,7 @@ The command prints one line per model. It exits with status 1 when a model fails
 - It undoes the integrations that `install` recorded for this profile. Hermes skills go with `hermes skills uninstall <name> --yes`, and rtk's Hermes plugin with `~/.local/bin/rtk init --agent hermes --uninstall`. The context7 MCP entry is restored with the other config changes. graphify writes its skill to `~/.hermes/skills/graphify/` whatever the profile, so uninstall deletes that folder only in the default profile and prints its path in the others. FreeLLMAPI's `setup-opencode` added its provider and a default model to OpenCode's config and stored FreeLLMAPI's key under `freellmapi` in `$XDG_DATA_HOME/opencode/auth.json`. Uninstall prints both paths and leaves those changes to you. When an undo command fails, uninstall prints the command and keeps the record.
 - It drops this profile from each shared part. When no other profile uses a part and Polytropos installed it, uninstall removes it. For FreeLLMAPI that is the service, `releases/` and the `current` link. Programs go with `uv tool uninstall`, `npm uninstall -g`, or by deleting their files in `~/.local` for rtk and the macOS Ollama. Ollama on Linux and Windows came from Ollama's install script, and uninstall asks you to remove it yourself. On Windows the desktop app is FreeLLMAPI, and uninstall leaves it.
 - With `--purge-data` it asks `Type yes to delete <path> with FreeLLMAPI's database, keys and backups: ` and deletes `~/.local/share/polytropos/freellmapi` after `yes`. While another profile still uses FreeLLMAPI, the folder stays. Without the option, uninstall prints where the data stays.
-- Last, it prints `hermes plugins remove <name>` for each pack plugin in the profile (`polytropos-router`, `ponytail`, `superpowers` and `polytropos`) and asks you to restart the gateway with `hermes gateway restart`.
+- Last, it prints `hermes plugins remove <name>` for each pack plugin in the profile (`polytropos-router`, `polymetis`, `ponytail`, `superpowers` and `polytropos`) and asks you to restart the gateway with `hermes gateway restart`.
 
 Uninstall exits with status 1 when a restore, an undo or the removal of a shared part failed. It keeps the record of what failed, so the next uninstall tries again.
 
@@ -185,15 +185,30 @@ Once a model has answered, later requests in the same turn try it first.
 
 ### Window fit
 
-The router checks the window of local models only. It estimates the size of a request in tokens as the length of the request's messages and tool definitions written as JSON, divided by 3. To that it adds the request's `max_tokens`, or 1024 when the request has none. A local model gets the request when this sum is at most the `context_window` of its upstream. A local upstream without `context_window` gets no requests. The code is `_candidates` and `_usable` in `plugins/polytropos_router/client.py`, with the estimate in `tokens.py`.
+The router checks the window of local models only. It estimates the size of a request in tokens as the length of the request's messages and tool definitions written as JSON, divided by 3. To that it adds the request's `max_tokens`, or 1024 when the request has none. A local model gets the request when this sum is at most the `context_window` of its upstream. A local upstream without `context_window` gets no requests. When another plugin changes the request for a local model, the check counts the changed request; see [Request hooks for local models](#request-hooks-for-local-models). The code is `_candidates` and `_unusable` in `plugins/polytropos_router/client.py`, with the estimate in `tokens.py`.
 
 Hermes v0.23.2 has no setting for the output limit. Its provider guide says that it no longer reads `model.max_tokens`, `HERMES_MAX_TOKENS` or provider output-cap settings (`website/docs/integrations/providers.md` in Hermes's source), and the router's provider profile sets no output limit of its own. A normal turn therefore reaches the router without `max_tokens`, and the check counts the router's default of 1024 output tokens (`client.py`). The router forwards the request with only `model` changed, so the model gets no `max_tokens` either. When Hermes retries a request, for example after a reply was cut off or an output limit was too large, it can set a one-time `max_tokens`, and the check counts that value.
 
 With `context_window: 8192`, a request fits when its estimate is at most 7168 tokens, which is about 21,500 characters of JSON. Hermes's system prompt and tool definitions count toward that. Hermes's prompt-surface test fixture (`tests/fixtures/prompt_surface/surfaces.json` in Hermes's source) puts a default turn with tools at about 12,000 tokens before any history, which the router's estimate counts as about 16,000. With the 1024 output tokens and the conversation's history on top, an agent turn with Hermes's default tools needs a window of about 20,000 tokens by the router's estimate. A window of 8192 serves short requests without tools, such as titles, and the next model in the chain gets the other requests.
 
+### Request hooks for local models
+
+Another plugin can change the request that a local model gets, for example to leave out tools and skills so that it fits a small window. [Polymetis](https://github.com/Lil-Clanky/polymetis) does this. A plugin registers a hook in the dict `local_request` of a module named `polytropos_router_hooks` in `sys.modules`, which the first plugin that registers creates:
+
+```python
+import sys, types
+
+store = sys.modules.setdefault("polytropos_router_hooks", types.ModuleType("polytropos_router_hooks"))
+store.__dict__.setdefault("local_request", {})["my-plugin"] = my_hook
+```
+
+For each local model in the chain, the router calls the hooks in the order they were registered, with a copy of the request and a dict of `upstream`, `model`, `window` (the model's `context_window`) and `fits`. `fits(request)` tells whether a request fits that window by the router's own estimate. A hook returns `None` to leave the request alone, or `{"request": ..., "variant": ...}` with a new request and a short name for it. The first hook that returns a request wins. The window fit and the request sent to that model then use it, with the `stream` setting of the request the router received, and the trace names the variant: a name of up to 32 letters, digits, `.`, `_` or `-`, else the hook's key. A hook that raises, or returns a request whose messages the router cannot read, is skipped, and the router logs the error type once, without the message. What a hook changes in its copy reaches no other model, so cloud models get the request as the router received it. Without hooks nothing changes.
+
+The memory guard, the fit check and the canary filter work as before. The router judges broken tool calls against the tools of the request it received, because Hermes can run each of those.
+
 ### Fallback
 
-On a rate limit (HTTP 429), a connection error or timeout, or a server error (HTTP 5xx), the router tries the next model in the chain. Other errors go straight to Hermes. When every model fails this way, Hermes gets the last error. When no model in the chain passes the filters, the error is `polytropos-router: no model in the route can take this request`.
+On a rate limit (HTTP 429), a connection error or timeout, or a server error (HTTP 5xx), the router tries the next model in the chain, and so it does when a local model rejects a request that a hook changed (HTTP 400 or 422), or the OpenAI SDK refuses that request before sending it. Other errors go straight to Hermes. When every model fails this way, Hermes gets the last error. When no model in the chain passes the filters, the error is `polytropos-router: no model in the route can take this request`.
 
 ### Broken tool calls
 
@@ -219,7 +234,7 @@ For an upstream with `api_key_env: FREELLMAPI_API_KEY`, the router uses the key 
 
 ### Traces
 
-With `save_traces: true` the router appends one JSON line per request to `~/.local/state/polytropos/router-traces.jsonl`, a file it creates with mode 0600. Each line has `time`, `tier`, `reason`, `slot` (the model that answered), `retried` and `fell_back_from` (the models tried before it), and no message text. `status` and `/polytropos` show the last line.
+With `save_traces: true` the router appends one JSON line per request to `~/.local/state/polytropos/router-traces.jsonl`, a file it creates with mode 0600. Each line has `time`, `tier`, `reason`, `slot` (the model that answered), `retried`, `fell_back_from` (the models tried before it), `skipped`, `tokens_est` and `duration_ms`, and no message text. `skipped` lists the local models that the hard filters left out, each with `window`, `guard` or `fit`, and the models that moved to the end of the chain for their tool checks, with `canary`. `tokens_est` is the router's estimate of the request that the answering model got, without the room for the reply. `duration_ms` runs from the start of the request to the answer, or to the end of the stream. When a request hook changed the answering model's request, `shaped` names the variant. At 5 MB the file moves to `router-traces.jsonl.1`, which replaces the older one. `status` and `/polytropos` show the last line.
 
 ## The classifier's extra call
 
@@ -328,6 +343,10 @@ It reads three variables from the gateway's environment, which Hermes loads from
 | `/pace help` | Shows these commands |
 
 `/pace` writes `enabled`, `min_seconds` and `max_seconds` to `~/.hermes/plugins/whatsapp-human-pace/settings.json`, and these win over the environment. The same file can hold `humanize`, which is `true` by default. With `false`, WhatsApp replies keep the model's Markdown and emoji. While messages wait, their text is saved in `pending.json` in the same folder, with mode 0600. After a gateway restart, the saved texts of a chat go along with the next message from that chat.
+
+### Polymetis
+
+Polymetis reads its settings from `plugins.entries.polymetis.settings` in `config.yaml`, at the start of every turn. With the defaults it only decides and logs. An ablation starts when Hermes next loads the plugin, as after a restart of Hermes or the gateway, because Polymetis adds the middleware it needs then. The keys, the log fields and the report are in [Polymetis's README](https://github.com/Lil-Clanky/polymetis).
 
 ## Memory guard
 
@@ -478,10 +497,11 @@ The file holds no B6 cells and no results of `--openai-endpoint` runs. Polytropo
 |---|---|
 | `~/.hermes/config.yaml` | Hermes settings. The router reads `plugins.entries.polytropos-router`, and the polytropos plugin reads `plugins.entries.polytropos.settings`. |
 | `~/.hermes/.env` | `FREELLMAPI_API_KEY`, written by `hermes config set FREELLMAPI_API_KEY <key>` |
-| `~/.hermes/plugins/polytropos/`, `polytropos-router/`, `superpowers/`, `ponytail/` | The pack plugins |
+| `~/.hermes/plugins/polytropos/`, `polytropos-router/`, `polymetis/`, `superpowers/`, `ponytail/` | The pack plugins |
 | `~/.hermes/plugins/polytropos/versions.lock` | The copy of `versions.lock` that the commands read |
 | `~/.hermes/plugins/.install-metadata.json` | Hermes's install records, which the doctor reads |
 | `~/.hermes/plugins/whatsapp-human-pace/` | whatsapp-human-pace with its `settings.json` and `pending.json`, when installed |
+| `~/.hermes/plugin-data/agent-plugin-polymetis-1717164d/` | Polymetis's `decisions.jsonl` and `index-<platform>.json`, mode 0600, when installed and `log` is on |
 | `~/.hermes/skills/graphify/` | graphify's Hermes skill, written by graphify to Hermes's default home |
 | `~/.hermes/plugins/rtk-rewrite/` | rtk's Hermes plugin, written by `rtk init --agent hermes` |
 | `~/.config/opencode/opencode.json` | OpenCode's config, where FreeLLMAPI's `setup-opencode` adds its provider and sets a default model |
@@ -569,6 +589,8 @@ A release takes two commits, because the pack file can only pin a commit that al
 2. Run `python scripts/release.py`. It sets the `ref` of each `Lil-Clanky/polytropos` entry in `hermes-pack.yaml` to that commit, which is `git rev-parse HEAD` unless you pass `--sha <commit>`. `--repo` picks another repository. The script rewrites the `ref` lines only, and exits with status 1 when no entry matched.
 3. Commit the pack file, tag this second commit and publish a GitHub release for the tag.
 4. For the Hermes plugin catalog, open a pull request on `NousResearch/hermes-agent` that sets `sha` and `version` in `plugin-catalog/polytropos.yaml` and in `plugin-catalog/polytropos-router.yaml` to the code commit from step 1. A maintainer reviews the commits between the old and the new pin before the catalog moves.
+
+The pack pins Polymetis to a commit of its own repository, `Lil-Clanky/polymetis`. Move that pin with `python scripts/release.py --repo Lil-Clanky/polymetis --sha <commit>` before step 3.
 
 ### Pins
 

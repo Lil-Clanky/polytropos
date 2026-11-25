@@ -17,6 +17,7 @@ Every command, setting and path is listed in [docs/reference.md](docs/reference.
 |---|---|---|
 | polytropos, polytropos-router | The two plugins above | The pack |
 | superpowers | Hermes plugin with a set of working skills | The pack |
+| polymetis | Hermes plugin that decides per session which skills a model gets, see [Polymetis](#polymetis) | The pack |
 | ponytail | Hermes plugin for shorter replies and smaller code changes | `hermes polytropos install` |
 | FreeLLMAPI | Local server that pools the free tiers of many model providers behind one OpenAI-compatible API | `hermes polytropos install` |
 | rtk | Compresses command output to save tokens | `hermes polytropos install` |
@@ -87,7 +88,7 @@ hermes polytropos doctor
 Here is what each step does.
 
 1. **Get the pack file.** Clone the repository, or download `hermes-pack.yaml` at a release tag from `https://raw.githubusercontent.com/Lil-Clanky/polytropos/<tag>/hermes-pack.yaml` and install that file. Releases do not attach the file.
-2. **Install the pack.** Hermes shows its review screen, a list of the plugins with their sources and pinned commits, and asks you to confirm with `y`. That question is why the pack install needs a terminal. Then Hermes scans each plugin before it installs it. On Hermes v0.23.2 the first run stops polytropos and prints the findings of its scan, prints a failure line for ponytail, and exits with status 1. The scan gives polytropos a caution verdict, with findings about launch agents, systemd services, git clones and `sudo`. They come from what the plugin does. It writes a LaunchAgent or a systemd unit to run FreeLLMAPI, it clones the git repository of FreeLLMAPI, and its doctor names `sudo pmset -a sleep 0` as a fix for you to run. Read the findings for polytropos, and for any other plugin that the scan stopped, then run the same command again with `--force`. With `--force` Hermes installs a plugin with a caution verdict without printing its findings, and a dangerous verdict still stops the plugin. The second run installs polytropos, polytropos-router and superpowers and prints the ponytail failure again. Step 4 tries to install ponytail with `hermes plugins install`, which Hermes refuses for the same reason, also after v0.23.2, see [Hermes v0.23.2 notes](docs/reference.md#hermes-v0232-notes). When an entry fails with `fatal: shallow file has changed since we read it`, run the command with `--force` once more. What this step says about the scan was read from Hermes's source and its scanner and has not been tried in a real install.
+2. **Install the pack.** Hermes shows its review screen, a list of the plugins with their sources and pinned commits, and asks you to confirm with `y`. That question is why the pack install needs a terminal. Then Hermes scans each plugin before it installs it. On Hermes v0.23.2 the first run stops polytropos and prints the findings of its scan, prints a failure line for ponytail, and exits with status 1. The scan gives polytropos a caution verdict, with findings about launch agents, systemd services, git clones and `sudo`. They come from what the plugin does. It writes a LaunchAgent or a systemd unit to run FreeLLMAPI, it clones the git repository of FreeLLMAPI, and its doctor names `sudo pmset -a sleep 0` as a fix for you to run. Read the findings for polytropos, and for any other plugin that the scan stopped, then run the same command again with `--force`. With `--force` Hermes installs a plugin with a caution verdict without printing its findings, and a dangerous verdict still stops the plugin. The second run installs polytropos, polytropos-router, polymetis and superpowers and prints the ponytail failure again. Step 4 tries to install ponytail with `hermes plugins install`, which Hermes refuses for the same reason, also after v0.23.2, see [Hermes v0.23.2 notes](docs/reference.md#hermes-v0232-notes). When an entry fails with `fatal: shallow file has changed since we read it`, run the command with `--force` once more. What this step says about the scan was read from Hermes's source and its scanner and has not been tried in a real install.
 3. **Run the doctor.** On a new install it reports FreeLLMAPI, ponytail and the programs as missing.
 4. **Install the rest.** `hermes polytropos install` builds FreeLLMAPI at its pinned tag and runs it as a service on `127.0.0.1:3001`. It asks before it installs a missing ponytail from its pinned commit with `hermes plugins install`, leaves a ponytail that is there as it is, installs the default programs, and asks about each optional one. When a FreeLLMAPI already answers on port 3001, Polytropos uses that one as it is and leaves its updates to you. To let Polytropos run it instead, stop it and run `hermes polytropos adopt --from <its checkout>`. When another program holds port 3001, install stops and asks you to free the port first.
 5. **Add provider keys.** Open FreeLLMAPI's dashboard at http://127.0.0.1:3001, add your provider keys, and copy FreeLLMAPI's unified API key, which the next step stores.
@@ -107,7 +108,7 @@ hermes plugins install polytropos
 hermes plugins install polytropos-router
 ```
 
-Hermes installs each one at the commit the catalog pins and does not stop at a caution verdict of its scan, because a maintainer read the code at that commit. superpowers comes with the pack only. Then continue with `hermes polytropos doctor` as above.
+Hermes installs each one at the commit the catalog pins and does not stop at a caution verdict of its scan, because a maintainer read the code at that commit. superpowers comes with the pack only, and polymetis installs on its own as described under [Polymetis](#polymetis). Then continue with `hermes polytropos doctor` as above.
 
 ### The FreeLLMAPI key
 
@@ -203,6 +204,18 @@ hermes plugins install Lil-Clanky/polytropos/plugins/whatsapp_human_pace
 ```
 
 Hermes asks whether to enable it, and the default answer is no. From the terminal or any chat other than WhatsApp, `/pace` shows or changes the delay. The settings are in the reference.
+
+## Polymetis
+
+`polymetis` is a plugin that decides per session which of Hermes's skills a model gets. It ranks the skills in Hermes's skill index against each message, on this machine and without a model, and logs what it decided without message text. By default it changes nothing that a model gets. Turned on, it adds a short tip that names the matching skill, and it gives local models behind `polytropos-router` a smaller request with fewer tools and skills. `hermes polymetis report` shows what it decided and which skills the models loaded.
+
+Polymetis has its own repository, [Lil-Clanky/polymetis](https://github.com/Lil-Clanky/polymetis), whose README describes its settings, files and report. The pack installs and enables it with its default settings, so it only decides and logs. It needs no other part of Polytropos and also installs on its own:
+
+```sh
+hermes plugins install Lil-Clanky/polymetis
+```
+
+Hermes then asks whether to enable it, and the default answer is no.
 
 ## Development
 

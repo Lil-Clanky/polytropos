@@ -35,7 +35,7 @@ OWN_REPO = "Lil-Clanky/polytropos"
 ROUTER_KEY = "plugins.entries.polytropos-router."
 # None removes the key: Hermes prefers a configured model.context_length over the router's own window.
 ROUTER_DEFAULT = [("model.provider", "polytropos-router"), ("model.default", "auto"), ("model.context_length", None)]
-PACK_PLUGINS = ("polytropos-router", "ponytail", "superpowers", "polytropos")
+PACK_PLUGINS = ("polytropos-router", "polymetis", "ponytail", "superpowers", "polytropos")
 PONYTAIL_QUESTION = "ponytail is not installed. Install it from its pinned commit?"
 PLUGIN_UPDATES = ("Hermes updates the Polytropos plugins themselves. After an install from the plugin catalog, run "
                   "hermes plugins update. After a pack install, run hermes plugins pack install --force with the "
