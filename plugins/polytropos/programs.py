@@ -98,7 +98,7 @@ def programs(lock: dict, *, platform: str, machine: str) -> list[Program]:
         _rtk(lock, platform, machine),
         Program("graphify", g["version"], ["graphify", "--version"], [
             ["uv", "tool", "install", f"{g['package']}=={g['version']}"],
-            ["graphify", "install", "--platform", "hermes"],
+            ["graphify", "install", "--platform", "hermes", "--project"],  # see _install_graphify
         ]),
         Program("ast-grep", a["version"], ["ast-grep", "--version"], [
             ["uv", "tool", "install", f"{a['package']}=={a['version']}"],
@@ -268,7 +268,38 @@ def install(p: Program, run=run_command, *, download: Callable[[str, Path], None
             env["FREELLMAPI_URL"] = f"http://127.0.0.1:{PORT}"
             if key := api_key():  # FreeLLMAPI's own CLI reads FreeLLMAPI's key, and asks for it without one
                 env["FREELLMAPI_API_KEY"] = key
+        if cmd[:2] == ["graphify", "install"]:
+            _install_graphify(cmd, run, env, hermes_home)
+            continue
         run(cmd, check=True, env=env)
+
+
+def _install_graphify(cmd: list[str], run, env: dict[str, str], hermes_home: Path) -> None:
+    """graphify ignores HERMES_HOME and writes its skill to Hermes's default home, whatever the profile. With --project
+    it writes the skill under its working folder, so it runs in a temporary folder and the skill goes into the
+    profile's skills/. The profile's copy goes in first, so graphify keeps a .bak of an edited one as it does at home."""
+    dest = hermes_home / "skills" / "graphify"
+    with tempfile.TemporaryDirectory() as tmp:
+        staged = Path(tmp) / ".hermes" / "skills" / "graphify"  # graphify's project destination (install.py)
+        if dest.is_dir():
+            shutil.copytree(dest, staged)
+        bak = staged / "SKILL.md.bak"
+        before = bak.read_bytes() if bak.is_file() else None
+        # Its output names the temporary folder. graphify writes UTF-8 whatever the Windows code page.
+        r = run(cmd, env=env, cwd=tmp, capture_output=True, encoding="utf-8", errors="replace")
+        if r.returncode:
+            print((r.stdout or "") + (r.stderr or ""), end="")
+            raise subprocess.CalledProcessError(r.returncode, cmd)
+        shutil.copytree(staged, dest, dirs_exist_ok=True)
+        for old in sorted(dest.rglob("*"), reverse=True):  # what graphify removed, such as an older references/
+            if not (staged / old.relative_to(dest)).exists():
+                if old.is_dir() and not old.is_symlink():
+                    old.rmdir()  # its contents went first, in reverse order
+                else:
+                    old.unlink()
+        if bak.is_file() and bak.read_bytes() != before:
+            print(f"graphify kept the previous SKILL.md as {dest / 'SKILL.md.bak'}, because it differed from the "
+                  "packaged skill.")
 
 
 def ponytail_fallback(lock: dict, run=run_command) -> None:

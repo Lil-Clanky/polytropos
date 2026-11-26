@@ -263,12 +263,23 @@ def _added_by(command: list[str], home: Path) -> Path | str | None:
         return f"mcp_servers.{command[3]}"
     if command[1:] == ["init", "--agent", "hermes"]:  # rtk's Hermes plugin (rtk's src/hooks/constants.rs)
         return home / "plugins" / "rtk-rewrite"
-    if command == ["graphify", "install", "--platform", "hermes"]:  # graphify ignores HERMES_HOME (install.py)
-        return paths.default_hermes_home() / "skills" / "graphify"
+    if command[:2] == ["graphify", "install"]:  # programs.install copies graphify's skill into the profile
+        return home / "skills" / "graphify"
     if command[-1:] == ["setup-opencode"]:  # FreeLLMAPI's CLI merges its provider into OpenCode's config (tools.ts)
         config_home = os.environ.get("XDG_CONFIG_HOME", "").strip() or Path.home() / ".config"
         return Path(config_home) / "opencode" / "opencode.json"
     return None
+
+
+def _outdated(command: list[str], target: Path | str, version: str) -> bool:
+    """A profile's copy of graphify's skill from another graphify version. After one profile's update the program is
+    current, so the other profiles refresh their copies through this."""
+    if command[:2] != ["graphify", "install"] or isinstance(target, str):
+        return False
+    try:
+        return (target / ".graphify_version").read_text(encoding="utf-8").strip() != version
+    except OSError:  # no stamp: not a copy that graphify wrote
+        return False
 
 
 def _snapshot(target: Path | str, home: Path):
@@ -298,12 +309,13 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
                if (target := _added_by(command, home)) is not None]
     existing = [c for c, t, old in touched if isinstance(t, str) and old is not None]  # Hermes would ask to overwrite
     # The program serves the whole machine and its integrations belong to each profile, so a profile that lacks one
-    # gets it. graphify's skill goes to Hermes's default home whatever the profile, so another profile does not run
-    # it again.
+    # gets it.
     lacking = [c for c, t, old in touched
                if (old is None or old is False) and (isinstance(t, str) or t.is_relative_to(home))]
+    outdated = [c for c, t, old in touched if old is True and _outdated(c, t, p.version)]
     # Update never adds an integration the profile lacks, so one the user removed stays removed.
     skipped = existing + ([] if add_integrations else [c for c, t, old in touched if old is None or old is False])
+    refresh = [c for c in p.install_cmds if c in outdated or (add_integrations and c in lacking)]
     step = "installed"
     try:
         before = programs.installed_version(p, fx.run)
@@ -311,9 +323,9 @@ def _install_program(p: programs.Program, state: State, profile: str, fx: Effect
             programs.install(replace(p, install_cmds=[c for c in p.install_cmds if c not in skipped]), fx.run,
                              download=fx.download, hermes_home=home)
             print(f"{p.name} {p.version} is installed.")
-        elif lacking and add_integrations:
+        elif refresh:
             step = "set up for this profile"
-            programs.install(replace(p, asset_url="", install_cmds=lacking), fx.run, hermes_home=home)
+            programs.install(replace(p, asset_url="", install_cmds=refresh), fx.run, hermes_home=home)
             print(f"{p.name} is set up for this profile.")
     except (subprocess.CalledProcessError, OSError, ValueError) as err:
         print(f"{p.name} was not {step}: {err}")
@@ -567,7 +579,7 @@ def _undo_integration(item: dict, home: Path, fx: Effects) -> bool:
     elif added.is_relative_to(home):
         shutil.rmtree(added, ignore_errors=True)
         return True
-    else:  # graphify writes to the default home whatever the profile, so the default profile may use this copy
+    else:  # graphify's skill in the default home, from an install by 0.3.0 or earlier; that profile may use it
         print(f"{shlex.join(ran)} added {added}, which is outside this profile. "
               "Remove it yourself if no other profile uses it.")
         return True
