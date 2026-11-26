@@ -73,7 +73,7 @@ def test_default_and_optional_sets():
     assert progs["graphify"].install_cmds[0] == [
         "uv", "tool", "install", f"{LOCK['graphify']['package']}=={LOCK['graphify']['version']}"
     ]
-    assert progs["graphify"].install_cmds[1] == ["graphify", "install", "--platform", "hermes"]
+    assert progs["graphify"].install_cmds[1] == ["graphify", "install", "--platform", "hermes", "--project"]
     assert progs["ast-grep"].install_cmds[1] == ["hermes", "skills", "install", "official/software-development/ast-grep"]
     assert progs["stack-canary"].install_cmds == [
         ["uv", "tool", "install", f"git+{LOCK['stack-canary']['repo']}@{LOCK['stack-canary']['ref']}"]
@@ -228,11 +228,65 @@ def test_rtk_sha_mismatch_raises_and_leaves_nothing(tmp_home):
     assert calls == []
 
 
-def test_install_runs_commands_in_order():
+def graphify_writes(cmd, k):
+    """What `graphify install --platform hermes --project` writes under its working folder."""
+    if cmd[:2] == ["graphify", "install"]:
+        (Path(k["cwd"]) / ".hermes" / "skills" / "graphify").mkdir(parents=True, exist_ok=True)
+
+
+def test_install_runs_commands_in_order(tmp_path):
     g = by_name(P.programs(LOCK, platform="darwin", machine="arm64"))["graphify"]
     calls = []
-    P.install(g, lambda cmd, **k: calls.append(cmd) or proc())
+    P.install(g, lambda cmd, **k: calls.append(cmd) or graphify_writes(cmd, k) or proc(), hermes_home=tmp_path)
     assert calls == g.install_cmds
+
+
+def test_graphify_writes_its_skill_into_the_profile(tmp_path, capsys):
+    g = by_name(P.programs(LOCK, platform="linux", machine="x86_64"))["graphify"]
+    skill = tmp_path / "profiles" / "work" / "skills" / "graphify" / "SKILL.md"
+    (skill.parent / "references" / "old").mkdir(parents=True)
+    (skill.parent / "references" / "old" / "gone.md").write_text("from an older graphify")
+    (skill.parent / "notes.md").write_text("mine")
+    skill.write_text("edited")
+    seen = []
+
+    def run(cmd, **k):
+        if cmd[:2] == ["graphify", "install"]:
+            assert k["encoding"] == "utf-8" and k["errors"] == "replace"  # not the Windows code page
+            staged = Path(k["cwd"]) / ".hermes" / "skills" / "graphify" / "SKILL.md"
+            seen.append(staged.read_text())  # graphify finds the profile's copy, so it keeps a .bak of an edit
+            staged.with_suffix(".md.bak").write_text(staged.read_text())
+            staged.write_text("packaged")
+            shutil.rmtree(staged.parent / "references")  # graphify replaces references/ as a whole
+            (staged.parent / "references").mkdir()
+            (staged.parent / "references" / "new.md").write_text("packaged")
+        return proc()
+
+    P.install(g, run, hermes_home=tmp_path / "profiles" / "work")
+    assert seen == ["edited"] and skill.read_text() == "packaged"
+    assert skill.with_suffix(".md.bak").read_text() == "edited"
+    assert sorted(p.name for p in (skill.parent / "references").iterdir()) == ["new.md"]
+    assert (skill.parent / "notes.md").read_text() == "mine"
+    assert f"kept the previous SKILL.md as {skill.with_suffix('.md.bak')}" in capsys.readouterr().out
+    assert not (tmp_path / ".hermes").exists()
+
+
+def test_graphify_without_a_skill_fails(tmp_path):
+    g = by_name(P.programs(LOCK, platform="linux", machine="x86_64"))["graphify"]
+    with pytest.raises(OSError):
+        P.install(g, lambda cmd, **k: proc(), hermes_home=tmp_path)
+    assert not (tmp_path / "skills").exists()
+
+
+def test_graphify_prints_its_output_only_when_it_fails(tmp_path, capsys):
+    g = by_name(P.programs(LOCK, platform="linux", machine="x86_64"))["graphify"]
+    out = "  skill installed  ->  .hermes/skills/graphify/SKILL.md\n"
+    P.install(g, lambda cmd, **k: graphify_writes(cmd, k) or proc(out), hermes_home=tmp_path)
+    assert capsys.readouterr().out == ""
+    failed = subprocess.CompletedProcess([], 1, stdout="", stderr="no skill file\n")
+    with pytest.raises(subprocess.CalledProcessError):
+        P.install(g, lambda cmd, **k: failed if cmd[0] == "graphify" else proc(), hermes_home=tmp_path)
+    assert capsys.readouterr().out == "no skill file\n"
 
 
 def test_context7_mcp_step_gets_no_terminal_input():
@@ -243,7 +297,7 @@ def test_context7_mcp_step_gets_no_terminal_input():
     assert mcp["stdin"] is subprocess.DEVNULL and mcp["capture_output"]  # an overwrite prompt fails at once
 
 
-def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch):
+def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
     monkeypatch.setenv("FREELLMAPI_API_KEY", "sk-freellmapi-test-key")
     monkeypatch.setenv("npm_config_cache", "/tmp/npm-cache")
@@ -254,10 +308,11 @@ def test_npm_npx_and_uv_get_no_provider_keys(monkeypatch):
 
     def run(cmd, **k):
         envs.setdefault(cmd[0], k.get("env"))
+        graphify_writes(cmd, k)
         return proc()
 
     for name in ("graphify", "opencode"):
-        P.install(progs[name], run)
+        P.install(progs[name], run, hermes_home=tmp_path)
     for tool in ("uv", "npm", "npx"):
         env = {k.upper(): v for k, v in envs[tool].items()}  # Windows spells every name in capitals
         assert "OPENAI_API_KEY" not in env and env["PATH"] == os.environ["PATH"]

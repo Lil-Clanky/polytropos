@@ -57,6 +57,8 @@ class FakeRun:
             if name not in self.versions:
                 raise FileNotFoundError(argv[0])
             return SimpleNamespace(returncode=0, stdout=f"{name} {self.versions[name]}\n", stderr="")
+        if argv[:2] == ["graphify", "install"] and "cwd" in kw:  # --project writes the skill under the working folder
+            (Path(kw["cwd"]) / ".hermes" / "skills" / "graphify").mkdir(parents=True, exist_ok=True)
         for prefix, effect in self.on.items():
             if argv[:len(prefix)] == list(prefix):
                 effect(argv)
@@ -418,7 +420,7 @@ def test_update_never_adds_an_integration_the_profile_lacks(tmp_home):
     assert cli.handle(parse("install", "--only", "rtk", "graphify"), cli.Effects(run=run, ask=no_questions)) == 0
     assert [c[1:] for c in run.commands()] == [["init", "--agent", "hermes"],
                                                ["tool", "install", f"graphifyy=={LOCK['graphify']['version']}"],
-                                               ["install", "--platform", "hermes"]]
+                                               ["install", "--platform", "hermes", "--project"]]
 
 
 def test_update_asks_before_it_installs_a_missing_ponytail(tmp_home):
@@ -592,7 +594,7 @@ def test_uninstall_removes_programs_without_provider_keys(monkeypatch):
 
 
 def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home, monkeypatch):
-    home = paths.default_hermes_home()  # where graphify writes; ~/.hermes, or %LOCALAPPDATA%\hermes on Windows
+    home = tmp_home / ".hermes" / "profiles" / "work"
     monkeypatch.setenv("HERMES_HOME", str(home))
     own_skill = home / "skills" / "software-development" / "ast-grep"  # the user's own, there before the install
     own_skill.mkdir(parents=True)
@@ -606,13 +608,13 @@ def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home, mon
         config["mcp_servers"][argv[3]] = {"command": argv[5]}
         (home / "config.yaml").write_text(yaml.safe_dump(config))
 
-    run = FakeRun(on={("hermes", "skills", "install"): skill_installed, ("hermes", "mcp", "add"): mcp_added,
-                      ("graphify", "install"): lambda argv: (home / "skills" / "graphify").mkdir(parents=True)})
+    run = FakeRun(on={("hermes", "skills", "install"): skill_installed, ("hermes", "mcp", "add"): mcp_added})
     assert cli.handle(parse("install", "--only", "graphify", "ast-grep", "qmd", "context7"),
                       cli.Effects(run=run, ask=no_questions)) == 0
     assert load_state().profiles[str(home)] == {
         "integrations": [
-            {"ran": ["graphify", "install", "--platform", "hermes"], "added": str(home / "skills" / "graphify")},
+            {"ran": ["graphify", "install", "--platform", "hermes", "--project"],
+             "added": str(home / "skills" / "graphify")},
             {"ran": ["hermes", "skills", "install", "official/research/qmd"],
              "added": str(home / "skills" / "research" / "qmd")}],
         "config_changes": [{"key": "mcp_servers.context7", "old": None, "new": {"command": "context7-mcp"}}]}
@@ -622,12 +624,13 @@ def test_uninstall_undoes_only_the_integrations_that_install_added(tmp_home, mon
         ["hermes", "config", "unset", "mcp_servers.context7"], ["hermes", "skills", "uninstall", "qmd", "--yes"]]
     assert not (home / "skills" / "graphify").exists() and own_skill.is_dir()
     assert str(home) not in load_state().profiles
+    assert not (paths.default_hermes_home() / "skills").exists()  # the default profile was never touched
 
 
 def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(tmp_home, monkeypatch, capsys):
     home = tmp_home / ".hermes" / "profiles" / "work"
     monkeypatch.setenv("HERMES_HOME", str(home))
-    graphify = tmp_home / ".hermes" / "skills" / "graphify"
+    graphify = tmp_home / ".hermes" / "skills" / "graphify"  # where 0.3.0 and earlier let graphify write
     graphify.mkdir(parents=True)
     rtk = [str(tmp_home / ".local" / "bin" / "rtk"), "init", "--agent", "hermes"]
     qmd = {"ran": ["hermes", "skills", "install", "official/research/qmd"],
@@ -646,7 +649,7 @@ def test_uninstall_runs_rtks_own_undo_and_leaves_what_lies_outside_the_profile(t
     assert load_state().profiles[str(home)] == {"integrations": [qmd]}
 
 
-def test_rtk_works_on_this_profile_and_graphify_on_hermess_default_home(tmp_home, monkeypatch):
+def test_rtk_and_graphify_work_on_this_profile(tmp_home, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-test-key")
     home = tmp_home / ".hermes" / "profiles" / "work"
     monkeypatch.setenv("HERMES_HOME", str(home))
@@ -659,11 +662,46 @@ def test_rtk_works_on_this_profile_and_graphify_on_hermess_default_home(tmp_home
     assert cli.handle(parse("uninstall"), cli.Effects(run=run, ask=no_questions)) == 0
     assert envs[0]["HERMES_HOME"] == str(home)  # rtk falls back to ~/.hermes without it
     assert "OPENAI_API_KEY" not in envs[0] and envs[0]["PATH"]  # and gets no provider key
-    graphify = ["graphify", "install", "--platform", "hermes"]  # graphify ignores HERMES_HOME
-    monkeypatch.setattr(cli.paths.sys, "platform", "win32")
-    assert cli._added_by(graphify, home) == tmp_home / "AppData" / "Local" / "hermes" / "skills" / "graphify"
-    monkeypatch.setattr(cli.paths.sys, "platform", "linux")
-    assert cli._added_by(graphify, home) == tmp_home / ".hermes" / "skills" / "graphify"
+    assert cli._added_by(["graphify", "install", "--platform", "hermes", "--project"], home) == (
+        home / "skills" / "graphify")
+
+
+def test_update_refreshes_a_profiles_graphify_skill_from_another_version(tmp_home, monkeypatch):
+    home = tmp_home / ".hermes" / "profiles" / "other"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    stamp = home / "skills" / "graphify" / ".graphify_version"
+    stamp.parent.mkdir(parents=True)
+    stamp.write_text("0.0.1")  # the update in another profile moved the program to the pin already
+    state = State()
+    use_shared(state, "graphify", str(home), version="0.0.1", installed_by_us=True)
+    save_state(state)
+    graphify = ["graphify", "install", "--platform", "hermes", "--project"]
+    run = FakeRun(versions={"graphify": LOCK["graphify"]["version"]})
+    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, ask=lambda q: "y")) == 0
+    assert [c for c in run.commands() if c[0] == "graphify"] == [graphify]
+    stamp.write_text(LOCK["graphify"]["version"])
+    run = FakeRun(versions={"graphify": LOCK["graphify"]["version"]})
+    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, ask=lambda q: "y")) == 0
+    assert [c for c in run.commands() if c[0] == "graphify"] == []
+    stamp.unlink()  # a copy without graphify's stamp is not graphify's, so it stays as it is
+    run = FakeRun(versions={"graphify": LOCK["graphify"]["version"]})
+    assert cli.handle(parse("update", "programs"), cli.Effects(run=run, ask=lambda q: "y")) == 0
+    assert [c for c in run.commands() if c[0] == "graphify"] == []
+
+
+def test_each_profile_gets_graphifys_skill_in_its_own_home(tmp_home, monkeypatch, capsys):
+    work, other = (tmp_home / ".hermes" / "profiles" / name for name in ("work", "other"))
+    monkeypatch.setenv("HERMES_HOME", str(work))
+    assert cli.handle(parse("install", "--only", "graphify"), cli.Effects(run=FakeRun(), ask=no_questions)) == 0
+    monkeypatch.setenv("HERMES_HOME", str(other))  # graphify is installed now, so this profile only gets the skill
+    run = FakeRun(versions={"graphify": LOCK["graphify"]["version"]})
+    assert cli.handle(parse("install", "--only", "graphify"), cli.Effects(run=run, ask=no_questions)) == 0
+    assert run.commands() == [["graphify", "install", "--platform", "hermes", "--project"]]
+    assert "graphify is set up for this profile." in capsys.readouterr().out
+    assert (work / "skills" / "graphify").is_dir() and (other / "skills" / "graphify").is_dir()
+    assert not (paths.default_hermes_home() / "skills").exists()
+    assert cli.handle(parse("uninstall"), cli.Effects(run=FakeRun(), ask=no_questions)) == 0
+    assert not (other / "skills" / "graphify").exists() and (work / "skills" / "graphify").is_dir()
 
 
 def test_install_records_rtks_hermes_plugin_and_uninstall_undoes_it(tmp_home):
